@@ -20,6 +20,7 @@ export type ForceRestoreReason =
   | 'user-disabled'
   | 'platform-disabled'
   | 'max-boosted'
+  | 'max-muted-only'
   | 'orphaned';
 
 export type RestoreReason = ForceRestoreReason | 'segment-end';

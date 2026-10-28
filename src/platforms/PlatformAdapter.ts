@@ -20,6 +20,13 @@ export interface AdapterContext {
   signal: AbortSignal; // aborted on teardown; all listeners use it
 }
 
+/** Selector health for logs (rate-contested, detection-lost, selector-drift). */
+export interface AdapterDiagnostics {
+  selectorsVersion: string;
+  /** Chain name → index of the selector that last matched; > 0 means a fallback was used. */
+  chainIndices: Record<string, number>;
+}
+
 export interface PlatformAdapter {
   readonly id: PlatformId;
   readonly displayName: string;
@@ -32,11 +39,14 @@ export interface PlatformAdapter {
   onVideoElementChange(cb: (v: HTMLVideoElement | null) => void): () => void;
   onNavigation(cb: (url: URL) => void): () => void;
   destroy(): void;
+  /** D14: element that scopes trusted-input detection (e.g. the player root); null → document. */
+  getInteractionRoot?(): Element | null;
+  getDiagnostics?(): AdapterDiagnostics;
 }
 
 /**
- * Implements everything except platform facts (§2.1): scoring, hysteresis, coalesced
- * re-evaluation and subscriber bookkeeping. Subclasses supply signals, the video element and
+ * Implements everything except platform facts (§2.1): raw scoring (no hysteresis or exit
+ * debounce, which the engine owns per D8), coalesced re-evaluation and subscriber bookkeeping. Subclasses supply signals, the video element and
  * their watchers, and call `invalidate()` when something they watch changes.
  */
 export abstract class BaseAdapter implements PlatformAdapter {

@@ -15,17 +15,24 @@ export interface AdSignal {
   at: number; // performance.now()
 }
 
+/**
+ * Raw detection state (D8): no hysteresis or delay. The engine owns enter/exit thresholds and
+ * exit debouncing.
+ */
 export interface AdStateSnapshot {
-  active: boolean; // after hysteresis
+  active: boolean; // confidence ≥ DEFAULT_THRESHOLDS.enterThreshold, informational (D8)
   kind: SegmentKind | null;
   confidence: number; // summed weight of active signals, capped at 1
   pod?: PodInfo;
   reasons: string[]; // sources that fired, for debug overlay + logs
-  /** §2.3 SSAI rule: the engine shortens its exit debounce to 100 ms (§3.4). */
+  /** §2.3 SSAI rule: the engine shortens its exit debounce to 100 ms (§3.4, D7). */
   ssaiSuspected?: boolean;
 }
 
-/** Per-adapter hysteresis constants (§2.1); overridable from the options debug panel. */
+/**
+ * Hysteresis constants, owned by the engine (D8) and overridable from the options debug panel.
+ * Adapters only use `enterThreshold` to fill the informational `active` flag.
+ */
 export interface Thresholds {
   enterThreshold: number;
   exitThreshold: number;

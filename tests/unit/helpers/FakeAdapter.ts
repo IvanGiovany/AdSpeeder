@@ -1,6 +1,7 @@
 import type {
   AdapterCapabilities,
   AdapterContext,
+  AdapterDiagnostics,
   PlatformAdapter,
 } from '../../../src/platforms/PlatformAdapter';
 import type { AdStateSnapshot, PodInfo, SegmentKind } from '../../../src/platforms/signals';
@@ -26,11 +27,16 @@ export function adSnapshot(
 }
 
 /**
- * Adapter's own hysteresis still says "active" but confidence has dropped: the class flicker
- * between pod ads (§2.1, §3.4).
+ * The raw state during the class flicker between pod ads (§3.4): adapters report no
+ * hysteresis (D8), so confidence simply drops to 0 for a moment.
  */
 export function flickerSnapshot(): AdStateSnapshot {
-  return { active: true, kind: 'ad', confidence: 0, reasons: [] };
+  return { ...IDLE_SNAPSHOT };
+}
+
+/** Raw state with a given confidence, e.g. inside the 0.2–0.6 hysteresis band. */
+export function confidenceSnapshot(confidence: number): AdStateSnapshot {
+  return { active: confidence >= 0.6, kind: 'ad', confidence, reasons: ['fake.partial'] };
 }
 
 /** A scriptable PlatformAdapter: tests push snapshots, videos and navigations into it. */
@@ -44,6 +50,9 @@ export class FakeAdapter implements PlatformAdapter {
   };
   watchContext = true;
   ctx: AdapterContext | null = null;
+  /** Optional contract methods (D14, diagnostics); tests assign them when needed. */
+  getInteractionRoot?: () => Element | null;
+  getDiagnostics?: () => AdapterDiagnostics;
   destroyed = false;
   private snapshot: AdStateSnapshot = IDLE_SNAPSHOT;
   private video: HTMLVideoElement | null;

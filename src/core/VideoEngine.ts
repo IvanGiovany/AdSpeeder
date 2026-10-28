@@ -138,7 +138,10 @@ export class VideoEngine {
     const snapshot = this.snapshots.get(v);
     const boost = this.boosts.get(v);
     this.boosts.delete(v);
-    if (!snapshot) return false;
+    if (!snapshot) {
+      this.snapshots.delete(v); // drops an unreadable crash marker too (D12)
+      return false;
+    }
     const keepRate = boost?.overrides.has('rate') ?? false;
     const keepMute = boost?.overrides.has('mute') ?? false;
     if (!keepRate) this.writeRate(v, snapshot.playbackRate);
@@ -151,6 +154,8 @@ export class VideoEngine {
       });
     }
     if (!keepMute) this.writeMuted(v, snapshot.muted);
+    // D12: the marker goes even if every write above failed; it must never outlive the boost.
+    // Dropping the boost entry above also clears this segment's user overrides (D11).
     this.snapshots.delete(v);
     if (verify && !keepRate) this.scheduleVerification(v, snapshot, boost?.appliedRate ?? null);
     return true;

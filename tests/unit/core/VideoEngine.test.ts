@@ -160,6 +160,26 @@ describe('restore', () => {
       });
     }
     expect(() => engine.restore(video.el)).not.toThrow();
+    expect(video.el.hasAttribute(BOOST_MARKER_ATTR)).toBe(false); // D12
+  });
+
+  it('drops an unreadable crash marker (D12)', () => {
+    const video = new FakeVideo();
+    video.el.setAttribute(BOOST_MARKER_ATTR, '{not json');
+    expect(engine.restore(video.el)).toBe(false);
+    expect(video.el.hasAttribute(BOOST_MARKER_ATTR)).toBe(false);
+    expect(video.rateWrites).toEqual([]);
+  });
+
+  it('clears user overrides on restore, so the next segment is muted again (D11)', () => {
+    const video = new FakeVideo();
+    engine.boost(video.el, { rate: 16, mute: true });
+    video.setMuted(false);
+    engine.markUserOverride(video.el, 'mute');
+    engine.restore(video.el);
+    engine.boost(video.el, { rate: 16, mute: true });
+    expect(engine.hasUserOverride(video.el, 'mute')).toBe(false);
+    expect(video.muted).toBe(true);
   });
 
   it('restores from the crash marker alone (new engine instance)', () => {

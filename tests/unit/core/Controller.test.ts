@@ -2,7 +2,9 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   Controller,
   MAX_BOOSTED_MS,
+  MAX_MUTED_ONLY_MS,
   ORPHAN_CHECK_MS,
+  SELECTOR_DRIFT_PAGES,
   STATS_FLUSH_MS,
   type ControllerOptions,
 } from '../../../src/core/Controller';
@@ -12,7 +14,13 @@ import { VideoEngine } from '../../../src/core/VideoEngine';
 import type { TabStatus } from '../../../src/shared/messaging';
 import { applyPatch, defaultSettings, type SettingsPatch } from '../../../src/shared/settings';
 import type { StatsBatch } from '../../../src/shared/stats';
-import { adSnapshot, FakeAdapter, flickerSnapshot, IDLE_SNAPSHOT } from '../helpers/FakeAdapter';
+import {
+  adSnapshot,
+  confidenceSnapshot,
+  FakeAdapter,
+  flickerSnapshot,
+  IDLE_SNAPSHOT,
+} from '../helpers/FakeAdapter';
 import { FakeVideo, flushMicrotasks, type FakeVideoOptions } from '../helpers/FakeVideo';
 import { silentLogger } from '../helpers/logger';
 
@@ -365,21 +373,6 @@ describe('force-restore triggers (§3.1)', () => {
     expect(h.video.playbackRate).toBe(4);
   });
 
-  it('maxBoostedMs restores, logs detection-lost and waits for the segment to end', async () => {
-    const h = await boosted();
-    vi.advanceTimersByTime(MAX_BOOSTED_MS);
-    expectRestored(h);
-    expect(h.log.warn).toHaveBeenCalledWith(
-      expect.stringContaining('detection-lost'),
-      expect.anything(),
-    );
-    h.adapter.emit(adSnapshot());
-    expect(phase(h)).toBe('IDLE');
-    h.adapter.emit(IDLE_SNAPSHOT);
-    h.adapter.emit(adSnapshot());
-    expect(phase(h)).toBe('BOOSTING');
-  });
-
   it('destroy (signal abort) restores and removes every listener', async () => {
     const h = await boosted();
     h.lifetime.abort();
@@ -541,5 +534,253 @@ describe('status reporting', () => {
       ['watching', null],
     ]);
     expect(h.statuses[1]?.pod).toEqual({ index: 1, total: 2 });
+  });
+});
+
+describe('hysteresis owned by the engine (D8)', () => {
+  it("enters only at confidence ≥ enterThreshold, whatever the adapter's active flag says", async () => {
+    const h = await setup();
+    h.adapter.emit({ ...confidenceSnapshot(0.5), active: true });
+    expect(phase(h)).toBe('IDLE');
+    h.adapter.emit(confidenceSnapshot(0.6));
+    expect(phase(h)).toBe('BOOSTING');
+  });
+
+  it('holds the boost inside the 0.2–0.6 band and exits only at ≤ exitThreshold', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot());
+    h.adapter.emit(confidenceSnapshot(0.3));
+    vi.advanceTimersByTime(5000);
+    expect(phase(h)).toBe('BOOSTING');
+    h.adapter.emit(confidenceSnapshot(0.2));
+    expect(phase(h)).toBe('EXIT_PENDING');
+    vi.advanceTimersByTime(300);
+    expect(phase(h)).toBe('IDLE');
+  });
+});
+
+describe('segment caps (D9)', () => {
+  const expectCap = (h: Harness, cap: 'boosted' | 'muted-only') => {
+    expect(h.log.warn).toHaveBeenCalledWith(
+      'detection-lost',
+      expect.objectContaining({ platform: 'youtube', cap }),
+    );
+  };
+
+  async function fightUntilContested(h: Harness): Promise<void> {
+    h.video.el.addEventListener('ratechange', () => {
+      if (h.video.playbackRate !== 1) h.video.siteSetsRate(1);
+    });
+    h.video.siteSetsRate(1);
+    for (let i = 0; i < 30 && phase(h) !== 'CONTESTED'; i++) {
+      await flushMicrotasks();
+      await vi.advanceTimersToNextTimerAsync();
+    }
+    expect(phase(h)).toBe('CONTESTED');
+  }
+
+  it('caps a rate-boosted segment at 90 s, then waits until the segment is over', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot());
+    vi.advanceTimersByTime(MAX_BOOSTED_MS - 1);
+    expect(phase(h)).toBe('BOOSTING');
+    vi.advanceTimersByTime(1);
+    expect(phase(h)).toBe('IDLE');
+    expect(h.video.playbackRate).toBe(1.5);
+    expect(h.video.muted).toBe(false);
+    expectCap(h, 'boosted');
+
+    h.adapter.emit(adSnapshot()); // still detected: no re-boost
+    expect(phase(h)).toBe('IDLE');
+    h.adapter.emit(flickerSnapshot()); // a drop shorter than the exit debounce…
+    vi.advanceTimersByTime(299);
+    h.adapter.emit(adSnapshot()); // …is not "segment over"
+    expect(phase(h)).toBe('IDLE');
+    h.adapter.emit(IDLE_SNAPSHOT); // ≤ exitThreshold for the full 300 ms is
+    vi.advanceTimersByTime(300);
+    h.adapter.emit(adSnapshot());
+    expect(phase(h)).toBe('BOOSTING');
+  });
+
+  it('caps a mute-only segment at 300 s, not 90 s', async () => {
+    const h = await setup({
+      configure: (a) => {
+        a.capabilities = { allowRateBoost: false, allowMute: true, rateEnforcement: 'none' };
+      },
+    });
+    h.adapter.emit(adSnapshot());
+    vi.advanceTimersByTime(MAX_BOOSTED_MS);
+    expect(phase(h)).toBe('BOOSTING');
+    vi.advanceTimersByTime(MAX_MUTED_ONLY_MS - MAX_BOOSTED_MS);
+    expect(phase(h)).toBe('IDLE');
+    expect(h.video.muted).toBe(false);
+    expectCap(h, 'muted-only');
+  });
+
+  it('switches to the 300 s cap when the segment becomes CONTESTED, keeping time spent', async () => {
+    const h = await setup();
+    const start = Date.now();
+    h.adapter.emit(adSnapshot());
+    await fightUntilContested(h);
+    vi.advanceTimersByTime(MAX_MUTED_ONLY_MS - (Date.now() - start) - 1);
+    expect(phase(h)).toBe('CONTESTED');
+    vi.advanceTimersByTime(1);
+    expect(phase(h)).toBe('IDLE');
+    expectCap(h, 'muted-only');
+  });
+
+  it('a user speed change moves the segment to the 300 s cap', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot());
+    userInput();
+    h.video.siteSetsRate(2);
+    await flushMicrotasks();
+    vi.advanceTimersByTime(MAX_BOOSTED_MS);
+    expect(phase(h)).toBe('BOOSTING');
+    vi.advanceTimersByTime(MAX_MUTED_ONLY_MS - MAX_BOOSTED_MS);
+    expect(phase(h)).toBe('IDLE');
+    expectCap(h, 'muted-only');
+  });
+});
+
+describe('trusted input scope (D14)', () => {
+  function trustedInputOn(target: EventTarget, type = 'pointerdown'): void {
+    const event = new Event(type, { bubbles: true });
+    Object.defineProperty(event, 'isTrusted', { value: true });
+    target.dispatchEvent(event);
+  }
+
+  function editableChild(): HTMLElement {
+    const div = document.createElement('div');
+    div.setAttribute('contenteditable', '');
+    const child = document.createElement('span');
+    div.append(child);
+    document.body.append(div);
+    return child;
+  }
+
+  it.each([
+    ['input', () => document.body.appendChild(document.createElement('input'))],
+    ['textarea', () => document.body.appendChild(document.createElement('textarea'))],
+    ['contenteditable', editableChild],
+  ])('ignores trusted input in %s', async (_name, make) => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot());
+    trustedInputOn(make(), 'keydown');
+    h.video.setMuted(false);
+    await flushMicrotasks();
+    expect(h.video.muted).toBe(true); // treated as a site unmute and undone
+  });
+
+  it('counts only input inside the interaction root when the adapter has one', async () => {
+    const root = document.createElement('div');
+    const control = document.createElement('button');
+    root.append(control);
+    const outside = document.createElement('button');
+    document.body.append(root, outside);
+    const h = await setup({
+      configure: (a) => {
+        a.getInteractionRoot = () => root;
+      },
+    });
+    h.adapter.emit(adSnapshot());
+
+    trustedInputOn(outside);
+    h.video.setMuted(false);
+    await flushMicrotasks();
+    expect(h.video.muted).toBe(true);
+
+    trustedInputOn(control);
+    h.video.setMuted(false);
+    await flushMicrotasks();
+    expect(h.video.muted).toBe(false);
+  });
+
+  it('falls back to the whole document when the root is null', async () => {
+    const outside = document.createElement('button');
+    document.body.append(outside);
+    const h = await setup({
+      configure: (a) => {
+        a.getInteractionRoot = () => null;
+      },
+    });
+    h.adapter.emit(adSnapshot());
+    trustedInputOn(outside);
+    h.video.setMuted(false);
+    await flushMicrotasks();
+    expect(h.video.muted).toBe(false);
+  });
+});
+
+describe('diagnostics in logs', () => {
+  it('attaches selector diagnostics to rate-contested and detection-lost', async () => {
+    const diagnostics = { selectorsVersion: '7', chainIndices: { playerRoot: 0, adModule: 1 } };
+    const h = await setup({
+      configure: (a) => {
+        a.getDiagnostics = () => diagnostics;
+      },
+    });
+    h.adapter.emit(adSnapshot());
+    h.video.el.addEventListener('ratechange', () => {
+      if (h.video.playbackRate !== 1) h.video.siteSetsRate(1);
+    });
+    h.video.siteSetsRate(1);
+    for (let i = 0; i < 30 && phase(h) !== 'CONTESTED'; i++) {
+      await flushMicrotasks();
+      await vi.advanceTimersToNextTimerAsync();
+    }
+    expect(h.log.warn).toHaveBeenCalledWith('rate-contested', {
+      platform: 'youtube',
+      ...diagnostics,
+    });
+    vi.advanceTimersByTime(MAX_MUTED_ONLY_MS);
+    expect(h.log.warn).toHaveBeenCalledWith(
+      'detection-lost',
+      expect.objectContaining({ selectorsVersion: '7', chainIndices: diagnostics.chainIndices }),
+    );
+  });
+
+  it('logs selector-drift once after 3 consecutive drifting watch pages', async () => {
+    expect(SELECTOR_DRIFT_PAGES).toBe(3);
+    let chainIndices: Record<string, number> = { playerRoot: 1 };
+    const h = await setup({
+      configure: (a) => {
+        a.getDiagnostics = () => ({ selectorsVersion: '7', chainIndices });
+      },
+    });
+    const driftLogs = () => h.log.warn.mock.calls.filter(([msg]) => msg === 'selector-drift');
+    const leavePage = () => {
+      h.adapter.navigate('https://www.youtube.com/watch?v=x');
+    };
+
+    leavePage();
+    leavePage();
+    expect(driftLogs()).toHaveLength(0);
+    leavePage();
+    expect(driftLogs()).toEqual([
+      ['selector-drift', { platform: 'youtube', selectorsVersion: '7', chainIndices }],
+    ]);
+    leavePage();
+    expect(driftLogs()).toHaveLength(1);
+
+    chainIndices = { playerRoot: 0 }; // a clean page resets the streak
+    leavePage();
+    chainIndices = { playerRoot: 2 };
+    leavePage();
+    leavePage();
+    expect(driftLogs()).toHaveLength(1);
+    leavePage();
+    expect(driftLogs()).toHaveLength(2);
+  });
+
+  it('does not count non-watch pages', async () => {
+    const h = await setup({
+      configure: (a) => {
+        a.watchContext = false;
+        a.getDiagnostics = () => ({ selectorsVersion: '7', chainIndices: { playerRoot: 1 } });
+      },
+    });
+    for (let i = 0; i < 4; i++) h.adapter.navigate('https://www.youtube.com/');
+    expect(h.log.warn).not.toHaveBeenCalledWith('selector-drift', expect.anything());
   });
 });

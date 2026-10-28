@@ -200,21 +200,38 @@ export interface PlatformAdapter {
   onVideoElementChange(cb: (v: HTMLVideoElement | null) => void): () => void;
   onNavigation(cb: (url: URL) => void): () => void;
   destroy(): void;
+  getInteractionRoot?(): Element | null; // D14: scopes trusted-input detection; null → document
+  getDiagnostics?(): AdapterDiagnostics; // selector health for logs
+}
+
+export interface AdapterDiagnostics {
+  selectorsVersion: string;
+  chainIndices: Record<string, number>; // chain → index that last matched; > 0 = fallback
 }
 ```
+
+`AdStateSnapshot` also carries `ssaiSuspected?: boolean` for the §3.4 exit rule (D7).
 
 `BaseAdapter` (abstract) implements everything except platform facts. Subclasses implement
 `protected collectSignals(): AdSignal[]`, `protected findVideo()`, `protected installWatchers()`
 and call `this.invalidate()` whenever something they watch changes. `invalidate()` is coalesced
 into one `queueMicrotask` re-score, so a burst of 40 mutations costs one evaluation.
 
-**Scoring and hysteresis** (in `BaseAdapter`, shared by every platform):
+**Scoring** (in `BaseAdapter`, shared by every platform) reports raw state only (D8):
 
-- `confidence = min(1, Σ weight of active signals)`.
-- Enter segment when `confidence ≥ enterThreshold` (default 0.6).
-- Leave only after `confidence ≤ exitThreshold` (default 0.2) holds for `exitDebounceMs`
-  (default 300 ms). This absorbs the class flicker between pod ads.
-- Thresholds are per-adapter constants, overridable from the options page's debug panel.
+- `confidence = min(1, Σ weight of active signals)`, plus `pod` and `ssaiSuspected`.
+- `active = confidence ≥ enterThreshold` (default 0.6), with no delay; it is informational.
+- Adapters do no exit debouncing.
+
+**Hysteresis** has a single owner, the engine (D8, §3.1):
+
+- Enter a segment when `confidence ≥ enterThreshold` (default 0.6).
+- Leave only after `confidence ≤ exitThreshold` (default 0.2) holds for the exit debounce:
+  300 ms by default, 1,000 ms while more pod ads are known to follow, 100 ms with
+  `ssaiSuspected` (§3.4). This absorbs the class flicker between pod ads. Between the two
+  thresholds the current state is kept.
+- "Segment over" means exactly that: `confidence ≤ exitThreshold` for the full exit debounce.
+- Thresholds are engine constants, overridable from the options page's debug panel.
 
 ### 2.2 Registry
 
@@ -274,8 +291,9 @@ confidence instead of breaking detection.
 
 **Selector chains.** `youtube/selectors.ts` exports `SELECTORS_VERSION` and arrays tried in
 order, for example `playerRoot: ['#movie_player', '.html5-video-player']`. A health check on
-each watch page logs which chain index matched; if index > 0 for 3 consecutive pages, the debug
-panel flags "selector drift".
+each watch page logs which chain index matched and exposes it through `getDiagnostics()`. When
+a watch page is left, `Controller` checks those indices; if any is > 0 for 3 consecutive watch
+pages, it logs `selector-drift` with the diagnostics attached and the debug panel flags it.
 
 **Pod parsing.** The ad badge shows text like "Ad 1 of 2" in the page's language. Parse with a
 locale-agnostic regex `/(\d+)\D+(\d+)/` over the badge's `textContent`, accepting only
@@ -297,8 +315,8 @@ mismatch):
 
 - Exit uses the earliest of: Y1 cleared, Y3 overlay removed, or the ad countdown reaching 0.
   Exiting late on a stitched stream fast-forwards real content.
-- A wall-clock cap (`maxBoostedMs`, default 90 s) forces a restore and logs `detection-lost`
-  if the segment never ends.
+- A wall-clock cap forces a restore and logs `detection-lost` if the segment never ends. It
+  applies to every segment, not only SSAI (D9, §3.1).
 
 **Context exclusions.** `isWatchContext` is true only on `/watch`, `/live/` and music player
 routes. On live streams (player class `ytp-live` or the bridge reports live), capabilities
@@ -336,22 +354,22 @@ one idempotent `restore()`, so no failure mode can leave the user at 16x or mute
 
 ### 3.1 State machine
 
-| State          | Entered when                                   | Engine action                                                                                                                 |
-| -------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `IDLE`         | Startup, or after restore                      | Nothing applied; no snapshot held                                                                                             |
-| `BOOSTING`     | Snapshot active and capabilities allow         | Take snapshot (only from `IDLE`), apply rate + mute, arm `RateGuard`                                                          |
-| `EXIT_PENDING` | Confidence falls below exit threshold          | Keep boost; start `exitDebounceMs` timer. If confidence recovers → back to `BOOSTING` with the same snapshot (pod transition) |
-| `CONTESTED`    | `RateGuard` budget exhausted                   | Stop rewriting rate; keep mute; still follows the exit path                                                                   |
-| `RESTORING`    | Debounce elapsed, or any force-restore trigger | Call `restore()`, verify after 500 ms, go to `IDLE`                                                                           |
+| State          | Entered when                                        | Engine action                                                                                                                 |
+| -------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `IDLE`         | Startup, or after restore                           | Nothing applied; no snapshot held                                                                                             |
+| `BOOSTING`     | Confidence ≥ enter threshold and capabilities allow | Take snapshot (only from `IDLE`), apply rate + mute, arm `RateGuard`                                                          |
+| `EXIT_PENDING` | Confidence falls below exit threshold               | Keep boost; start `exitDebounceMs` timer. If confidence recovers → back to `BOOSTING` with the same snapshot (pod transition) |
+| `CONTESTED`    | `RateGuard` budget exhausted                        | Stop rewriting rate; keep mute; still follows the exit path. Sticky for the segment (D10)                                     |
+| `RESTORING`    | Debounce elapsed, or any force-restore trigger      | Call `restore()`, verify after 500 ms, go to `IDLE`                                                                           |
 
 _Engine state machine · 5 states_ (PDF p.11 diagram; sketch reconstructed from the table above):
 
 ```mermaid
 stateDiagram-v2
   [*] --> IDLE
-  IDLE --> BOOSTING: snapshot active & capabilities allow
+  IDLE --> BOOSTING: confidence ≥ enter threshold & capabilities allow
   BOOSTING --> EXIT_PENDING: confidence ≤ exit threshold
-  EXIT_PENDING --> BOOSTING: confidence recovers (pod transition)
+  EXIT_PENDING --> BOOSTING: confidence recovers (pod transition; CONTESTED if contested)
   BOOSTING --> CONTESTED: RateGuard budget exhausted
   CONTESTED --> RESTORING: exit path
   EXIT_PENDING --> RESTORING: debounce elapsed
@@ -359,10 +377,19 @@ stateDiagram-v2
 ```
 
 Pod transitions loop between `BOOSTING` and `EXIT_PENDING` without re-snapshotting; every exit
-funnels into `RESTORING`.
+funnels into `RESTORING`. `CONTESTED` is sticky for the segment (D10): if confidence recovers
+during the exit debounce of a contested segment, the machine returns to `CONTESTED`, not
+`BOOSTING`, so `RateGuard` is never re-armed mid-segment.
+
+**Segment caps (D9).** Wall-clock time is measured per segment from the moment of boosting. The
+limit depends on the current mode: `maxBoostedMs` = 90 s while the rate is boosted,
+`maxMutedOnlyMs` = 300 s when it is not (mute-only capability, `CONTESTED`, or a user speed
+override). A mode change re-arms the cap without resetting the time already spent. When a cap
+fires, the engine restores and logs `detection-lost`, and it does not re-boost until the segment
+is over (§2.1).
 
 **Force-restore triggers**, valid from any state: navigation, adapter `destroy`, `pagehide`,
-user toggles off, platform disabled in settings, `maxBoostedMs` cap reached, orphaned extension
+user toggles off, platform disabled in settings, a segment cap reached, orphaned extension
 context detected.
 
 ### 3.2 VideoEngine API
@@ -383,18 +410,25 @@ export class VideoEngine {
     private probe: RateProbe,
     private log: Logger,
   ) {}
-  boost(v: HTMLVideoElement, opts: { rate: number; mute: boolean }): void;
-  reassert(v: HTMLVideoElement): void; // after load events / guard
-  restore(v: HTMLVideoElement | null): void; // idempotent, safe on detached nodes
+  // D11: returns the rate that stuck; rate null = mute only (live)
+  boost(v: HTMLVideoElement, opts: { rate: number | null; mute: boolean }): number | null;
+  // after load events / guard; { rate: false } re-mutes only (CONTESTED)
+  reassert(v: HTMLVideoElement, opts?: { rate?: boolean }): void;
+  restore(v: HTMLVideoElement | null): boolean; // idempotent, safe on detached nodes
   transfer(from: HTMLVideoElement, to: HTMLVideoElement): void; // node swap mid-ad
   isBoosted(v: HTMLVideoElement): boolean;
+  appliedRate(v: HTMLVideoElement): number | null; // D11
+  markUserOverride(v: HTMLVideoElement, kind: 'rate' | 'mute'): void; // D11, §3.3
+  hasUserOverride(v: HTMLVideoElement, kind: 'rate' | 'mute'): boolean; // D11
 }
 ```
 
 **Applying a boost**
 
 1. If no snapshot exists for this element (`WeakMap<HTMLVideoElement, MediaSnapshot>`), record
-   one. Never snapshot while already boosted, or the "user state" would become 16x.
+   one and write the crash marker `v.dataset.adspeederBoosted = JSON.stringify(snapshot)`
+   immediately, before any media write (D12). Never snapshot while already boosted, or the
+   "user state" would become 16x.
 2. `target = min(settings.speed, probe.maxFor(v), capabilities.maxRateHint ?? ∞)`.
 3. Set `v.muted = true` (only if `allowMute` and the user has not unmuted this segment). Leave
    `volume` untouched, so restore never has to guess it.
@@ -402,14 +436,16 @@ export class VideoEngine {
    `NotSupportedError` or a read-back that doesn't match (the browser silently capped the rate)
    both count as a rejection: tell `RateProbe` to lower the ceiling and retry with the next
    ladder value until a write sticks (D5).
-5. Write a crash marker: `v.dataset.adspeederBoosted = JSON.stringify(snapshot)`.
+5. (The crash marker was already written in step 1, D12.)
 
 **Restoring**
 
-1. Read the snapshot (WeakMap, else the dataset marker). If none, return.
+1. Read the snapshot (WeakMap, else the dataset marker). If none, remove any unreadable marker
+   and return.
 2. Restore `playbackRate`, `defaultPlaybackRate`, `preservesPitch`, then `muted`, each in its
-   own `try/catch`.
-3. Delete the snapshot and the marker.
+   own `try/catch`. A rate or mute the user overrode this segment is left as the user set it.
+3. Delete the snapshot and the marker, even if no media write succeeded (D12), and clear the
+   segment's user overrides (D11).
 4. Schedule a 500 ms verification. YouTube re-applies its own saved speed when content resumes;
    if the rate then differs from the snapshot and from 1.0, accept the site's value (it is the
    user's preference), log it, and stop.
@@ -423,8 +459,12 @@ across loads.
 ### 3.3 State preservation and user intent
 
 - **Volume is never written**, only `muted`. The user's volume level cannot drift.
-- **User unmutes during an ad:** a capturing `pointerdown`/`keydown` listener on the player
-  records the last trusted input time. A `volumechange` that unmutes within 500 ms of trusted
+- **User unmutes during an ad:** a capturing `pointerdown`/`keydown` listener records the last
+  trusted input time (D14). Input whose target is an `input`, a `textarea` or
+  `[contenteditable]` is ignored. When the adapter implements `getInteractionRoot()` and it
+  returns an element, only input inside that element counts; otherwise the whole document does.
+  The listener sits on `document` and checks containment per event, so a root that appears late
+  or is replaced by SPA navigation keeps working. A `volumechange` that unmutes within 500 ms of trusted
   input marks `userOverride.mute` for the current segment; the engine stops re-muting until the
   segment ends. Restore then leaves `muted` as the user set it.
 - **User changes speed during an ad:** same rule via `ratechange` → `userOverride.rate`;
@@ -440,8 +480,9 @@ across loads.
   another ad is known to follow.
 - A pod index increment counts as a new ad in stats; a new `<video>` node mid-pod triggers
   `transfer()` (3.5).
-- With `ssaiSuspected`, the exit debounce drops to 100 ms and the `maxBoostedMs` cap is armed
-  (2.3), trading a little flicker for never fast-forwarding real content.
+- With `ssaiSuspected`, the exit debounce drops to 100 ms (2.3), trading a little flicker for
+  never fast-forwarding real content. The engine owns all three debounces (D8); the segment cap
+  applies to every segment (D9).
 
 ### 3.5 Rate-reset defense (`RateGuard`)
 
@@ -462,7 +503,9 @@ else enter('CONTESTED'); // 10 rewrites per 5 s window
 - A token-bucket budget (10 rewrites per 5 s) plus exponential backoff caps the cost of a
   fighting page at a handful of writes.
 - In `CONTESTED`, the extension keeps the ad muted and logs `rate-contested` with the platform
-  and selector version, which shows up in the options debug panel.
+  and the adapter's `getDiagnostics()` (selector version and chain indices), which shows up in
+  the options debug panel. `CONTESTED` lasts for the rest of the segment (D10), and the segment
+  switches to the 300 s muted-only cap (D9).
 
 ### 3.6 SPA navigation and media node tracking (`MediaTracker`)
 
@@ -473,7 +516,7 @@ else enter('CONTESTED'); // 10 rewrites per 5 s window
   if still connected, moves the snapshot to the new element, and boosts it.
 - When several `<video>` elements exist (previews, miniplayer), the active one is the connected
   element with the largest on-screen area and `readyState ≥ 2`, preferring one inside the
-  adapter's player root.
+  adapter's player root (`pickActiveVideo` in `shared/dom.ts`, D13).
 - On `onNavigation`: force-restore, reset the machine to `IDLE`, clear per-segment overrides,
   then call `evaluateNow()` once the adapter reports the new watch context. A pre-roll on the
   new page is detected normally.
@@ -703,7 +746,9 @@ Read docs/BUILD_PLAN.md section 2.1-2.3. Implement:
 2. platforms/youtube/selectors.ts with SELECTORS_VERSION and fallback chains
    for player root, ad module, overlay, preview, skip container, badge text,
    live indicator.
-3. YouTubeAdapter with signals Y1-Y5, pod parsing regex, ssaiSuspected rule,
+3. YouTubeAdapter with signals Y1-Y5 reported raw (D8), pod parsing regex,
+   ssaiSuspected rule, getInteractionRoot() returning the player root (D14),
+   getDiagnostics() with SELECTORS_VERSION and chain indices,
    live-stream capabilities, isWatchContext, and navigation via yt-navigate-
    finish + popstate + 1 s href poll.
 4. youtube-bridge.ts (MAIN world) and bridgeProtocol.ts with namespace +
@@ -715,6 +760,9 @@ Read docs/BUILD_PLAN.md section 2.1-2.3. Implement:
 7. Unit tests on the adapter against fixtures; Playwright e2e that loads the
    Chromium build, serves fixtures under a youtube.com host mapping, and asserts
    rate/mute transitions and final restore.
+8. tests/fixtures/rate-probe.html: plays a short local video, tries each ladder
+   value and prints what was accepted, rejected or silently capped. The owner
+   runs it by hand in Firefox and Safari; record results in docs/selector-log.md.
 ```
 
 **Done when:** e2e shows boost within 250 ms of `ad-showing`, one snapshot across the pod,
@@ -862,3 +910,32 @@ Places where the plan was ambiguous or self-contradictory, resolved with the own
   Unit tests cover the arithmetic, batching and pruning.
 - **§4.2 Firefox `world: "MAIN"` row** now states `strict_min_version` 140 (Android 142), as
   shipped in Phase 1.
+- **D7 — `ssaiSuspected` on `AdStateSnapshot`.** §3.4's 100 ms exit rule needs it, and the
+  snapshot is the only channel from adapter to engine. Optional boolean (§2.1).
+- **D8 — Single owner for hysteresis: the engine.** Adapters report raw state only:
+  `confidence`, `pod`, `ssaiSuspected`, and `active = confidence ≥ enterThreshold` with no
+  delay. The engine owns the enter threshold, the exit threshold and the 300 / 1,000 / 100 ms
+  exit timers. "Segment over" = `confidence ≤ exitThreshold` for the full exit debounce. (§2.1,
+  §3.1, §3.4)
+- **D9 — Segment caps by mode.** Wall-clock time per segment; `maxBoostedMs` 90 s while the rate
+  is boosted, `maxMutedOnlyMs` 300 s when it isn't (mute-only capability, `CONTESTED`, user
+  speed override). Either cap restores, logs `detection-lost`, and blocks re-boosting until the
+  segment is over. Armed for every segment, not only SSAI. (§3.1)
+- **D10 — `CONTESTED` is sticky for the segment.** Recovery from `EXIT_PENDING` returns to
+  `CONTESTED`, never re-arming `RateGuard` mid-segment. (§3.1, §3.5)
+- **D11 — VideoEngine API additions.** `boost()` returns the rate that stuck and accepts
+  `rate: null` (mute only); `reassert(v, { rate: false })`; `appliedRate`, `markUserOverride`,
+  `hasUserOverride`. User overrides are cleared on restore. (§3.2)
+- **D12 — Crash marker at snapshot time.** Written before any media write; `restore()` removes
+  it even when no media write succeeded, and removes unreadable markers. (§3.2)
+- **D13 — `pickActiveVideo` lives in `shared/dom.ts`.** Adapters call it from `findVideo()`, and
+  `platforms/` may not import `core/`. (§3.6)
+- **D14 — Trusted-input guard.** Input targeting `input`, `textarea` or `[contenteditable]` is
+  ignored. Optional `PlatformAdapter.getInteractionRoot()` scopes detection to that element
+  (YouTube returns its player root in Phase 3); without it, the whole document counts. (§3.3)
+- **Diagnostics.** Optional `PlatformAdapter.getDiagnostics()` returns
+  `{ selectorsVersion, chainIndices }`; `Controller` attaches it to `rate-contested`,
+  `detection-lost` and `selector-drift` logs and runs the 3-page drift rule (§2.3).
+  `SELECTORS_VERSION` is a string. YouTube implements it in Phase 3.
+- **Real speed limits.** Phase 3 adds `tests/fixtures/rate-probe.html` (item 8) for manual runs
+  in Firefox and Safari; results go in `docs/selector-log.md`.

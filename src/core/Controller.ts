@@ -27,12 +27,21 @@ import { BOOST_MARKER_ATTR } from './SessionSnapshot';
 import { StatsMeter } from './StatsMeter';
 import { sameRate, VideoEngine } from './VideoEngine';
 
+/** D9: per-segment wall-clock caps, by mode. */
 export const MAX_BOOSTED_MS = 90_000;
+export const MAX_MUTED_ONLY_MS = 300_000;
 export const ORPHAN_CHECK_MS = 5_000;
 export const STATS_FLUSH_MS = 10_000;
 export const TRUSTED_INPUT_WINDOW_MS = 500;
 export const POD_EXIT_DEBOUNCE_MS = 1_000;
 export const SSAI_EXIT_DEBOUNCE_MS = 100;
+/** §2.3: consecutive watch pages with a fallback selector before "selector drift" is logged. */
+export const SELECTOR_DRIFT_PAGES = 3;
+
+/** D14: trusted input in these targets is typing, not a player control. */
+const EDITABLE_TARGET = 'input, textarea, [contenteditable]:not([contenteditable="false"])';
+
+type CapMode = 'boosted' | 'muted-only';
 
 export interface ControllerOptions {
   adapter: PlatformAdapter;
@@ -42,6 +51,7 @@ export interface ControllerOptions {
   signal: AbortSignal;
   thresholds?: Readonly<Thresholds>;
   maxBoostedMs?: number;
+  maxMutedOnlyMs?: number;
   /** Clock for trusted-input timing and stats; defaults to performance.now(). */
   now?: () => number;
   /** Orphan detection (§3.6); defaults to checking browser.runtime.id. */
@@ -69,6 +79,7 @@ export class Controller {
   private readonly lifetime: AbortController;
   private readonly thresholds: Readonly<Thresholds>;
   private readonly maxBoostedMs: number;
+  private readonly maxMutedOnlyMs: number;
   private readonly now: () => number;
   private readonly isRuntimeAlive: () => boolean;
   private readonly sendStats: (batch: StatsBatch) => Promise<void>;
@@ -83,13 +94,18 @@ export class Controller {
   private machine: MachineState = INITIAL_STATE;
   private boostedVideo: HTMLVideoElement | null = null;
   private latest: AdStateSnapshot | null = null;
-  /** The last active snapshot; its pod/SSAI info picks the exit debounce after the ad UI goes. */
+  /** The last snapshot at or above the enter threshold; picks the exit debounce (§3.4). */
   private lastActive: AdStateSnapshot | null = null;
-  /** After maxBoostedMs fires, don't re-boost until the adapter reports the segment over. */
-  private suppressUntilInactive = false;
+  /** D9: after a cap fires, no re-boost until the segment is over. */
+  private suppressed = false;
+  private segmentOverTimer: ReturnType<typeof setTimeout> | null = null;
   private lastTrustedInputAt = Number.NEGATIVE_INFINITY;
   private exitTimer: ReturnType<typeof setTimeout> | null = null;
+  private segmentStartedAt: number | null = null;
   private capTimer: ReturnType<typeof setTimeout> | null = null;
+  private capMode: CapMode | null = null;
+  private pageIsWatch = false;
+  private driftStreak = 0;
   private readonly unsubscribers: (() => void)[] = [];
   private destroyed = false;
 
@@ -99,6 +115,7 @@ export class Controller {
     this.log = options.log;
     this.thresholds = options.thresholds ?? DEFAULT_THRESHOLDS;
     this.maxBoostedMs = options.maxBoostedMs ?? MAX_BOOSTED_MS;
+    this.maxMutedOnlyMs = options.maxMutedOnlyMs ?? MAX_MUTED_ONLY_MS;
     this.now = options.now ?? (() => performance.now());
     this.isRuntimeAlive = options.isRuntimeAlive ?? runtimeAlive;
     this.sendStats = options.sendStats ?? ((batch) => sendMessage({ type: 'stats-batch', batch }));
@@ -127,11 +144,10 @@ export class Controller {
         },
         isRecentUserInput: () => this.isRecentUserInput(),
         onUserOverride: (v) => {
-          this.engine.markUserOverride(v, 'rate');
-          this.meter.setRate(null);
+          this.onUserRateOverride(v);
         },
         onContested: () => {
-          this.log.warn('rate-contested', { platform: this.adapter.id });
+          this.log.warn('rate-contested', this.diagnostics());
           this.dispatch({ type: 'guard-exhausted' });
         },
       },
@@ -168,8 +184,12 @@ export class Controller {
       }),
     );
 
+    // D14: scoped to the adapter's interaction root when it has one. Filtering on document
+    // (rather than listening on the root) keeps working when the root appears late or is replaced.
     const noteInput = (event: Event) => {
-      if (event.isTrusted) this.lastTrustedInputAt = this.now();
+      if (event.isTrusted && this.isPlayerInteraction(event.target)) {
+        this.lastTrustedInputAt = this.now();
+      }
     };
     document.addEventListener('pointerdown', noteInput, { capture: true, signal });
     document.addEventListener('keydown', noteInput, { capture: true, signal });
@@ -203,6 +223,7 @@ export class Controller {
       { once: true },
     );
 
+    this.pageIsWatch = this.adapter.isWatchContext(new URL(location.href));
     this.onSnapshot(this.adapter.evaluateNow());
     this.report();
   }
@@ -215,6 +236,7 @@ export class Controller {
       this.forceRestore('platform-disabled');
     } else if (isBoostedPhase(this.machine.phase) && this.boostedVideo) {
       this.applyBoost(this.boostedVideo); // speed or mute changed mid-segment
+      this.syncCap();
     }
     if (this.latest) this.onSnapshot(this.latest);
   }
@@ -228,6 +250,7 @@ export class Controller {
     this.flushStats();
     this.clearExitTimer();
     this.clearCapTimer();
+    this.clearSegmentOverTimer();
     this.guard.disarm();
     for (const unsubscribe of this.unsubscribers.splice(0)) unsubscribe();
     this.lifetime.abort();
@@ -247,11 +270,18 @@ export class Controller {
     this.dispatch({ type: 'force-restore', reason });
   }
 
+  /**
+   * D8: the engine is the single owner of hysteresis. Adapters report raw confidence; entering
+   * needs confidence ≥ enterThreshold, leaving needs confidence ≤ exitThreshold for the whole
+   * exit debounce (EXIT_PENDING), and anything in between keeps the current state.
+   */
   private onSnapshot(snapshot: AdStateSnapshot): void {
     if (this.destroyed) return;
     this.latest = snapshot;
-    if (!snapshot.active) this.suppressUntilInactive = false;
-    if (snapshot.active) this.lastActive = snapshot;
+    const aboveEnter = snapshot.confidence >= this.thresholds.enterThreshold;
+    const belowExit = snapshot.confidence <= this.thresholds.exitThreshold;
+    if (aboveEnter) this.lastActive = snapshot;
+    this.trackSegmentOver(snapshot, belowExit);
 
     const relevant = snapshot.kind !== null && this.wants(snapshot.kind);
     const caps = this.adapter.getCapabilities();
@@ -259,13 +289,13 @@ export class Controller {
     const enabled = this.settings.enabled && this.settings.platforms[this.adapter.id];
     const engaged =
       enabled &&
-      snapshot.active &&
+      aboveEnter &&
       relevant &&
       canAct &&
-      !this.suppressUntilInactive &&
+      !this.suppressed &&
       this.tracker?.current != null &&
       this.adapter.isWatchContext(new URL(location.href));
-    const ended = !enabled || !relevant || snapshot.confidence <= this.thresholds.exitThreshold;
+    const ended = !enabled || !relevant || belowExit;
 
     if (isBoostedPhase(this.machine.phase)) this.meter.observePod(snapshot.pod);
     this.dispatch({ type: 'detection', engaged, ended, exitDelayMs: this.exitDelayFor(snapshot) });
@@ -275,9 +305,28 @@ export class Controller {
     return kind === 'ad' || this.settings.promoActions[kind] === 'speed';
   }
 
+  /**
+   * D9: "segment over" means confidence ≤ exitThreshold for the full exit debounce. Only
+   * tracked while suppressed after a cap; it is what lifts the suppression.
+   */
+  private trackSegmentOver(snapshot: AdStateSnapshot, belowExit: boolean): void {
+    if (!this.suppressed || !belowExit) {
+      this.clearSegmentOverTimer();
+      return;
+    }
+    if (this.segmentOverTimer !== null) return;
+    this.segmentOverTimer = setTimeout(() => {
+      this.segmentOverTimer = null;
+      this.suppressed = false;
+      this.lastActive = null;
+      this.log.debug('segment over; boosting allowed again');
+    }, this.exitDelayFor(snapshot));
+  }
+
   /** §3.4: 100 ms when SSAI is suspected, 1,000 ms when the pod has more ads, else default. */
   private exitDelayFor(snapshot: AdStateSnapshot): number {
-    const reference = snapshot.active ? snapshot : (this.lastActive ?? snapshot);
+    const aboveEnter = snapshot.confidence >= this.thresholds.enterThreshold;
+    const reference = aboveEnter ? snapshot : (this.lastActive ?? snapshot);
     if (reference.ssaiSuspected) return SSAI_EXIT_DEBOUNCE_MS;
     const pod = reference.pod;
     if (pod && pod.index < pod.total) return POD_EXIT_DEBOUNCE_MS;
@@ -286,7 +335,10 @@ export class Controller {
 
   private onNavigation(url: URL): void {
     this.forceRestore('navigation');
-    this.suppressUntilInactive = false;
+    this.closePage();
+    this.pageIsWatch = this.adapter.isWatchContext(url);
+    this.suppressed = false;
+    this.clearSegmentOverTimer();
     this.lastActive = null;
     if (this.adapter.isWatchContext(url)) this.onSnapshot(this.adapter.evaluateNow());
     this.report();
@@ -303,6 +355,7 @@ export class Controller {
       this.boostedVideo = next;
       this.meter.resync();
       if (guardWasArmed) this.armGuard();
+      this.syncCap();
     } else if (!isBoostedPhase(this.machine.phase) && next && this.latest) {
       // A video showing up can be what makes an already-active segment actionable.
       this.onSnapshot(this.latest);
@@ -357,16 +410,29 @@ export class Controller {
         if (target === null || sameRate(v.playbackRate, target)) return;
         if (this.isRecentUserInput()) {
           this.guard.disarm();
-          this.engine.markUserOverride(v, 'rate');
-          this.meter.setRate(null);
+          this.onUserRateOverride(v);
         }
       },
       { signal },
     );
   }
 
+  private onUserRateOverride(v: HTMLVideoElement): void {
+    this.engine.markUserOverride(v, 'rate');
+    this.meter.setRate(null);
+    this.syncCap(); // the rate is no longer boosted: the muted-only cap applies (D9)
+  }
+
   private isRecentUserInput(): boolean {
     return this.now() - this.lastTrustedInputAt <= TRUSTED_INPUT_WINDOW_MS;
+  }
+
+  /** D14: ignore typing in editable fields, and input outside the adapter's interaction root. */
+  private isPlayerInteraction(target: EventTarget | null): boolean {
+    if (!(target instanceof Element)) return true;
+    if (target.closest(EDITABLE_TARGET)) return false;
+    const root = this.adapter.getInteractionRoot?.() ?? null;
+    return root === null || root.contains(target);
   }
 
   private dispatch(event: MachineEvent): void {
@@ -381,6 +447,7 @@ export class Controller {
       this.dispatch({ type: 'restored' });
       return;
     }
+    this.syncCap();
     if (next.phase !== before.phase) {
       this.report();
       this.checkOrphan();
@@ -414,17 +481,11 @@ export class Controller {
         this.clearExitTimer();
         return;
       case 'arm-cap':
-        this.clearCapTimer();
-        this.capTimer = setTimeout(() => {
-          this.capTimer = null;
-          this.log.warn('detection-lost: maxBoostedMs reached; restoring', {
-            platform: this.adapter.id,
-          });
-          this.suppressUntilInactive = true;
-          this.forceRestore('max-boosted');
-        }, this.maxBoostedMs);
+        this.segmentStartedAt = this.now();
+        this.syncCap();
         return;
       case 'cancel-cap':
+        this.segmentStartedAt = null;
         this.clearCapTimer();
         return;
       case 'restore': {
@@ -453,6 +514,32 @@ export class Controller {
     return applied;
   }
 
+  /**
+   * D9: one wall-clock budget per segment, whose limit depends on the current mode: 90 s while
+   * the rate is boosted, 300 s when it isn't (mute-only capability, CONTESTED, user override).
+   * Re-arming on a mode change keeps the time already spent.
+   */
+  private syncCap(): void {
+    const v = this.boostedVideo;
+    if (!isBoostedPhase(this.machine.phase) || this.segmentStartedAt === null || !v) {
+      this.clearCapTimer();
+      return;
+    }
+    const rateBoosted = !this.machine.contested && this.engine.appliedRate(v) !== null;
+    const mode: CapMode = rateBoosted ? 'boosted' : 'muted-only';
+    if (this.capTimer !== null && this.capMode === mode) return;
+    this.clearCapTimer();
+    const limit = mode === 'boosted' ? this.maxBoostedMs : this.maxMutedOnlyMs;
+    const remaining = Math.max(0, limit - (this.now() - this.segmentStartedAt));
+    this.capMode = mode;
+    this.capTimer = setTimeout(() => {
+      this.capTimer = null;
+      this.log.warn('detection-lost', { ...this.diagnostics(), cap: mode, limitMs: limit });
+      this.suppressed = true;
+      this.forceRestore(mode === 'boosted' ? 'max-boosted' : 'max-muted-only');
+    }, remaining);
+  }
+
   private armGuard(): void {
     const v = this.boostedVideo;
     const caps = this.adapter.getCapabilities();
@@ -464,6 +551,33 @@ export class Controller {
     for (const v of document.querySelectorAll<HTMLVideoElement>(`video[${BOOST_MARKER_ATTR}]`)) {
       if (this.engine.restore(v))
         this.log.info('restored a crash marker left by a previous instance');
+    }
+  }
+
+  /** Platform + selector diagnostics for rate-contested, detection-lost and selector-drift. */
+  private diagnostics(): Record<string, unknown> {
+    const d = this.adapter.getDiagnostics?.();
+    return d
+      ? {
+          platform: this.adapter.id,
+          selectorsVersion: d.selectorsVersion,
+          chainIndices: d.chainIndices,
+        }
+      : { platform: this.adapter.id };
+  }
+
+  /**
+   * §2.3 selector-drift rule, evaluated once per watch page as it is left: a page counts as
+   * drifting when any chain matched at a fallback index (> 0).
+   */
+  private closePage(): void {
+    if (!this.pageIsWatch) return;
+    const d = this.adapter.getDiagnostics?.();
+    if (!d) return;
+    const drifting = Object.values(d.chainIndices).some((index) => index > 0);
+    this.driftStreak = drifting ? this.driftStreak + 1 : 0;
+    if (this.driftStreak === SELECTOR_DRIFT_PAGES) {
+      this.log.warn('selector-drift', this.diagnostics());
     }
   }
 
@@ -511,8 +625,15 @@ export class Controller {
   }
 
   private clearCapTimer(): void {
+    this.capMode = null;
     if (this.capTimer === null) return;
     clearTimeout(this.capTimer);
     this.capTimer = null;
+  }
+
+  private clearSegmentOverTimer(): void {
+    if (this.segmentOverTimer === null) return;
+    clearTimeout(this.segmentOverTimer);
+    this.segmentOverTimer = null;
   }
 }
