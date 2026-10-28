@@ -1,0 +1,10 @@
+{
+  "extName": {
+    "message": "AdSpeeder",
+    "description": "Extension name shown in the browser and stores."
+  },
+  "extDescription": {
+    "message": "Plays video ads at the fastest speed your browser allows, muted, then restores your exact playback settings.",
+    "description": "Extension description shown in the browser and stores."
+  }
+}

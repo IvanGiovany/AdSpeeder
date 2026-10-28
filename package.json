@@ -1,0 +1,35 @@
+{
+  "name": "adspeeder",
+  "description": "Speeds up and mutes video ads, then restores your exact playback state.",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wxt",
+    "dev:firefox": "wxt -b firefox --mv3",
+    "build": "npm run build:chrome && npm run build:firefox && npm run build:edge",
+    "build:chrome": "wxt build -b chrome",
+    "build:edge": "wxt build -b edge",
+    "build:firefox": "wxt build -b firefox --mv3",
+    "build:safari": "wxt build -b safari && xcrun safari-web-extension-converter .output/safari-mv3 --project-location safari --app-name AdSpeeder --no-open --force",
+    "zip": "wxt zip -b chrome && wxt zip -b firefox --mv3 && wxt zip -b edge",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . && prettier --check .",
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "postinstall": "wxt prepare"
+  },
+  "devDependencies": {
+    "@eslint/js": "10.0.1",
+    "@playwright/test": "1.64.1",
+    "eslint": "10.13.0",
+    "eslint-config-prettier": "10.1.8",
+    "globals": "17.13.0",
+    "happy-dom": "21.0.4",
+    "prettier": "3.9.10",
+    "typescript": "6.0.3",
+    "typescript-eslint": "8.72.1",
+    "vitest": "5.0.5",
+    "wxt": "0.21.4"
+  }
+}

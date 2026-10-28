@@ -8,7 +8,8 @@ Oct 28, 2026 · @Ivan
 > restored, and the directory tree and tables were rebuilt from the PDF layout. The page-11
 > state-machine diagram is an image and is reproduced below as a Mermaid sketch derived from
 > the 3.1 table. Wording is otherwise unchanged. If anything here disagrees with the PDF, the
-> PDF wins and this file should be corrected.
+> PDF wins and this file should be corrected. Ambiguities resolved with the owner are logged in
+> [Resolved decisions](#resolved-decisions) at the end and marked (D1), (D2)… where they apply.
 
 ## Overview
 
@@ -86,10 +87,11 @@ adspeeder/
 │   │       ├── index.html
 │   │       ├── main.ts
 │   │       └── options.css
+│   ├── bootstrap.ts              # shared content-script bootstrap(id) (D2)
 │   ├── core/
 │   │   ├── Controller.ts         # wires adapter → state machine → engine
 │   │   ├── VideoEngine.ts        # playbackRate/mute apply + restore
-│   │   ├── AdStateMachine.ts     # IDLE / AD_ACTIVE / AD_TRANSITION / RESTORING
+│   │   ├── AdStateMachine.ts     # IDLE / BOOSTING / EXIT_PENDING / CONTESTED / RESTORING (D3)
 │   │   ├── RateGuard.ts          # defends against site rate resets
 │   │   ├── MediaTracker.ts       # finds and re-binds the active <video>
 │   │   ├── RateProbe.ts          # max-supported-rate ladder per element
@@ -129,13 +131,13 @@ adspeeder/
 
 ### Responsibilities by layer
 
-| Layer                         | Owns                                                                                     | Must not                                             |
-| ----------------------------- | ---------------------------------------------------------------------------------------- | ---------------------------------------------------- |
-| `entrypoints/*.content.ts`    | Read settings, pick adapter from registry, construct `Controller`, tear down on unload  | Contain detection or rate logic                      |
-| `entrypoints/background.ts`   | Settings defaults on install, stats aggregation, badge text, message routing            | Touch the DOM                                        |
-| `core/`                       | Applying/restoring media state, the ad state machine, rate defense, media node tracking | Know any platform selector                           |
-| `platforms/`                  | Turning platform DOM/API facts into `AdSignal` events and supplying the `<video>`       | Set `playbackRate` or `muted`                        |
-| `shared/`                     | Storage, messaging, logging, DOM helpers                                                 | Import from `core/` or `platforms/`                  |
+| Layer                          | Owns                                                                                    | Must not                                              |
+| ------------------------------ | --------------------------------------------------------------------------------------- | ----------------------------------------------------- |
+| `entrypoints/*.content.ts`     | Read settings, pick adapter from registry, construct `Controller`, tear down on unload  | Contain detection or rate logic                       |
+| `entrypoints/background.ts`    | Settings defaults on install, stats aggregation, badge text, message routing            | Touch the DOM                                         |
+| `core/`                        | Applying/restoring media state, the ad state machine, rate defense, media node tracking | Know any platform selector                            |
+| `platforms/`                   | Turning platform DOM/API facts into `AdSignal` events and supplying the `<video>`       | Set `playbackRate` or `muted`                         |
+| `shared/`                      | Storage, messaging, logging, DOM helpers                                                | Import from `core/` or `platforms/`                   |
 | `entrypoints/popup`, `options` | User controls and stats display                                                         | Talk to content scripts except through `messaging.ts` |
 
 ## 2. Cross-Platform Abstraction Strategy
@@ -227,12 +229,22 @@ export interface AdapterDefinition {
 }
 
 export const ADAPTERS = [
-  { id: 'youtube', displayName: 'YouTube',
+  {
+    id: 'youtube',
+    displayName: 'YouTube',
     matches: ['*://www.youtube.com/*', '*://m.youtube.com/*', '*://music.youtube.com/*'],
-    defaultEnabled: true, experimental: false, create: () => new YouTubeAdapter() },
-  { id: 'netflix', displayName: 'Netflix',
+    defaultEnabled: true,
+    experimental: false,
+    create: () => new YouTubeAdapter(),
+  },
+  {
+    id: 'netflix',
+    displayName: 'Netflix',
     matches: ['*://www.netflix.com/*'],
-    defaultEnabled: false, experimental: true, create: () => new NetflixAdapter() },
+    defaultEnabled: false,
+    experimental: true,
+    create: () => new NetflixAdapter(),
+  },
 ] as const satisfies readonly AdapterDefinition[];
 ```
 
@@ -251,13 +263,13 @@ safeguards in 3.4 unchanged.
 YouTube is detected with five independent signal families, so losing any one selector degrades
 confidence instead of breaking detection.
 
-| #   | Signal                         | How it is watched                                                                                                                                      | Weight | Notes                                                   |
-| --- | ------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------ | ------ | ------------------------------------------------------- |
-| Y1  | Player root has `ad-showing`   | MutationObserver on `#movie_player` (fallback `.html5-video-player`), `attributeFilter: ['class']`                                                     | 0.6    | Primary signal, alone crosses the enter threshold       |
-| Y2  | Player root has `ad-interrupting` | Same observer                                                                                                                                       | 0.6    | Mid-roll variant; overlaps Y1                           |
-| Y3  | Ad UI present and visible      | Subtree observer on `.video-ads`, `.ytp-ad-module`; checks `.ytp-ad-player-overlay`, `.ytp-ad-preview-container`, skip-button containers, ad badge text | 0.3    | Also the source of pod index/total and `skippable`      |
-| Y4  | Player API says ad             | MAIN-world bridge compares the player's current video id with the URL `v` param and reads any ad-state accessor that exists                            | 0.5    | Optional; absent bridge = no signal, never a negative   |
-| Y5  | Media corroboration            | `loadedmetadata` / `durationchange` / `emptied` on the `<video>`; src swap or duration far below the content duration while Y1–Y4 are partly active     | 0.1    | Never enough alone; breaks ties                         |
+| #   | Signal                            | How it is watched                                                                                                                                       | Weight | Notes                                                 |
+| --- | --------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- | ------ | ----------------------------------------------------- |
+| Y1  | Player root has `ad-showing`      | MutationObserver on `#movie_player` (fallback `.html5-video-player`), `attributeFilter: ['class']`                                                      | 0.6    | Primary signal, alone crosses the enter threshold     |
+| Y2  | Player root has `ad-interrupting` | Same observer                                                                                                                                           | 0.6    | Mid-roll variant; overlaps Y1                         |
+| Y3  | Ad UI present and visible         | Subtree observer on `.video-ads`, `.ytp-ad-module`; checks `.ytp-ad-player-overlay`, `.ytp-ad-preview-container`, skip-button containers, ad badge text | 0.3    | Also the source of pod index/total and `skippable`    |
+| Y4  | Player API says ad                | MAIN-world bridge compares the player's current video id with the URL `v` param and reads any ad-state accessor that exists                             | 0.5    | Optional; absent bridge = no signal, never a negative |
+| Y5  | Media corroboration               | `loadedmetadata` / `durationchange` / `emptied` on the `<video>`; src swap or duration far below the content duration while Y1–Y4 are partly active     | 0.1    | Never enough alone; breaks ties                       |
 
 **Selector chains.** `youtube/selectors.ts` exports `SELECTORS_VERSION` and arrays tried in
 order, for example `playerRoot: ['#movie_player', '.html5-video-player']`. A health check on
@@ -323,13 +335,13 @@ one idempotent `restore()`, so no failure mode can leave the user at 16x or mute
 
 ### 3.1 State machine
 
-| State          | Entered when                                    | Engine action                                                                                                                         |
-| -------------- | ----------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| `IDLE`         | Startup, or after restore                       | Nothing applied; no snapshot held                                                                                                     |
-| `BOOSTING`     | Snapshot active and capabilities allow          | Take snapshot (only from `IDLE`), apply rate + mute, arm `RateGuard`                                                                  |
-| `EXIT_PENDING` | Confidence falls below exit threshold           | Keep boost; start `exitDebounceMs` timer. If confidence recovers → back to `BOOSTING` with the same snapshot (pod transition)          |
-| `CONTESTED`    | `RateGuard` budget exhausted                    | Stop rewriting rate; keep mute; still follows the exit path                                                                           |
-| `RESTORING`    | Debounce elapsed, or any force-restore trigger  | Call `restore()`, verify after 500 ms, go to `IDLE`                                                                                   |
+| State          | Entered when                                   | Engine action                                                                                                                 |
+| -------------- | ---------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `IDLE`         | Startup, or after restore                      | Nothing applied; no snapshot held                                                                                             |
+| `BOOSTING`     | Snapshot active and capabilities allow         | Take snapshot (only from `IDLE`), apply rate + mute, arm `RateGuard`                                                          |
+| `EXIT_PENDING` | Confidence falls below exit threshold          | Keep boost; start `exitDebounceMs` timer. If confidence recovers → back to `BOOSTING` with the same snapshot (pod transition) |
+| `CONTESTED`    | `RateGuard` budget exhausted                   | Stop rewriting rate; keep mute; still follows the exit path                                                                   |
+| `RESTORING`    | Debounce elapsed, or any force-restore trigger | Call `restore()`, verify after 500 ms, go to `IDLE`                                                                           |
 
 _Engine state machine · 5 states_ (PDF p.11 diagram; sketch reconstructed from the table above):
 
@@ -366,7 +378,10 @@ export interface MediaSnapshot {
 }
 
 export class VideoEngine {
-  constructor(private probe: RateProbe, private log: Logger) {}
+  constructor(
+    private probe: RateProbe,
+    private log: Logger,
+  ) {}
   boost(v: HTMLVideoElement, opts: { rate: number; mute: boolean }): void;
   reassert(v: HTMLVideoElement): void; // after load events / guard
   restore(v: HTMLVideoElement | null): void; // idempotent, safe on detached nodes
@@ -434,7 +449,8 @@ never loop.
 // on 'ratechange' while BOOSTING
 if (v.playbackRate === target) return; // our own write echoing back
 if (userInputWithin(500)) return standDown('user');
-if (budget.take()) queueReassert(backoff.next()); // 0, 50, 100, 200, 400 ms
+if (budget.take())
+  queueReassert(backoff.next()); // 0, 50, 100, 200, 400 ms
 else enter('CONTESTED'); // 10 rewrites per 5 s window
 ```
 
@@ -488,26 +504,49 @@ section 1 works unchanged.
   "description": "__MSG_extDescription__",
   "version": "0.1.0",
   "default_locale": "en",
-  "icons": { "16": "icons/16.png", "32": "icons/32.png", "48": "icons/48.png", "128": "icons/128.png" },
-  "action": { "default_popup": "popup.html", "default_icon": { "16": "icons/16.png", "32": "icons/32.png" } },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icons/16.png", "32": "icons/32.png" }
+  },
   "options_ui": { "page": "options.html", "open_in_tab": true },
   "background": { "service_worker": "background.js", "type": "module" },
   "permissions": ["storage"],
   "host_permissions": [
-    "*://www.youtube.com/*", "*://m.youtube.com/*", "*://music.youtube.com/*",
+    "*://www.youtube.com/*",
+    "*://m.youtube.com/*",
+    "*://music.youtube.com/*",
     "*://www.netflix.com/*"
   ],
   "content_scripts": [
-    { "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*", "*://music.youtube.com/*"],
-      "js": ["content-scripts/youtube.js"], "run_at": "document_start", "all_frames": false },
-    { "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*", "*://music.youtube.com/*"],
-      "js": ["content-scripts/youtube-bridge.js"], "run_at": "document_start", "world": "MAIN" },
-    { "matches": ["*://www.netflix.com/*"],
-      "js": ["content-scripts/netflix.js"], "run_at": "document_idle" }
+    {
+      "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*", "*://music.youtube.com/*"],
+      "js": ["content-scripts/youtube.js"],
+      "run_at": "document_start",
+      "all_frames": false
+    },
+    {
+      "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*", "*://music.youtube.com/*"],
+      "js": ["content-scripts/youtube-bridge.js"],
+      "run_at": "document_start",
+      "world": "MAIN"
+    },
+    {
+      "matches": ["*://www.netflix.com/*"],
+      "js": ["content-scripts/netflix.js"],
+      "run_at": "document_idle"
+    }
   ],
   "web_accessible_resources": [
-    { "resources": ["youtube-bridge.js"],
-      "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*", "*://music.youtube.com/*"] }
+    {
+      "resources": ["youtube-bridge.js"],
+      "matches": ["*://www.youtube.com/*", "*://m.youtube.com/*", "*://music.youtube.com/*"]
+    }
   ]
 }
 ```
@@ -519,14 +558,14 @@ script is declared statically and exits on its first line unless the user has en
 
 ### 4.2 Per-browser differences
 
-| Concern               | Chrome / Edge                            | Firefox                                                                                                              | Safari                                                                  |
-| --------------------- | ---------------------------------------- | -------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
-| Background            | `service_worker`                         | `background.scripts` (event page); WXT emits it                                                                      | WXT's Safari target; confirm in Xcode build                             |
-| Extension ID          | Store-assigned                           | `browser_specific_settings.gecko.id` + `strict_min_version` required                                                 | Bundle identifier in the Xcode project                                  |
-| `world: "MAIN"`       | Supported (Chrome 111+)                  | Supported in recent versions; set `strict_min_version` accordingly                                                   | Treat as unsupported; use the `<script src>` injection fallback         |
-| Host permission grant | Granted at install                       | Check with `permissions.contains` at startup; popup shows a "Grant access" button calling `permissions.request` if missing | User enables per site in Safari settings; popup shows guidance    |
-| Max `playbackRate`    | Probe (expect 16)                        | Probe; audio is muted anyway                                                                                         | Probe                                                                   |
-| Packaging             | .zip to Chrome Web Store / Edge Add-ons  | .zip + source archive to AMO                                                                                         | `xcrun safari-web-extension-converter` → Xcode app → App Store Connect |
+| Concern               | Chrome / Edge                           | Firefox                                                                                                                    | Safari                                                                 |
+| --------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| Background            | `service_worker`                        | `background.scripts` (event page); WXT emits it                                                                            | WXT's Safari target; confirm in Xcode build                            |
+| Extension ID          | Store-assigned                          | `browser_specific_settings.gecko.id` + `strict_min_version` required                                                       | Bundle identifier in the Xcode project                                 |
+| `world: "MAIN"`       | Supported (Chrome 111+)                 | Supported in recent versions; set `strict_min_version` accordingly                                                         | Treat as unsupported; use the `<script src>` injection fallback        |
+| Host permission grant | Granted at install                      | Check with `permissions.contains` at startup; popup shows a "Grant access" button calling `permissions.request` if missing | User enables per site in Safari settings; popup shows guidance         |
+| Max `playbackRate`    | Probe (expect 16)                       | Probe; audio is muted anyway                                                                                               | Probe                                                                  |
+| Packaging             | .zip to Chrome Web Store / Edge Add-ons | .zip + source archive to AMO                                                                                               | `xcrun safari-web-extension-converter` → Xcode app → App Store Connect |
 
 The bridge loader in `youtube.content.ts` checks for a `data-adspeeder-bridge` attribute the
 MAIN-world script sets on `document.documentElement`; if absent after 1 s, it injects
@@ -739,19 +778,19 @@ Add unit tests for formatting and settings round-trips.
 
 ### Test matrix
 
-| Scenario                                  | Unit | Fixture e2e (Chromium) | Manual (Chrome, Firefox, Edge, Safari) |
-| ----------------------------------------- | ---- | ---------------------- | -------------------------------------- |
-| Single pre-roll                           | Yes  | Yes                    | Yes                                    |
-| Pod of 2–3 with class flicker             | Yes  | Yes                    | Yes                                    |
-| Mid-roll during content at user speed 1.5x | Yes | Yes                    | Yes                                    |
-| Stitched (SSAI) ad, no src swap           | Yes  | Yes                    | When observed                          |
-| Live stream mid-roll (mute only)          | Yes  | Yes                    | Yes                                    |
-| Site resets rate repeatedly               | Yes  | Yes                    | --                                     |
-| User unmutes or changes speed during ad   | Yes  | Yes                    | Yes                                    |
-| SPA navigation mid-ad                     | Yes  | Yes                    | Yes                                    |
-| `<video>` replaced mid-pod                | Yes  | Yes                    | --                                     |
-| Extension disabled / reloaded mid-ad      | Yes  | Yes                    | Yes                                    |
-| Netflix ad break, intro, recap            | Yes  | Yes                    | Ad-tier account only                   |
+| Scenario                                   | Unit | Fixture e2e (Chromium) | Manual (Chrome, Firefox, Edge, Safari) |
+| ------------------------------------------ | ---- | ---------------------- | -------------------------------------- |
+| Single pre-roll                            | Yes  | Yes                    | Yes                                    |
+| Pod of 2–3 with class flicker              | Yes  | Yes                    | Yes                                    |
+| Mid-roll during content at user speed 1.5x | Yes  | Yes                    | Yes                                    |
+| Stitched (SSAI) ad, no src swap            | Yes  | Yes                    | When observed                          |
+| Live stream mid-roll (mute only)           | Yes  | Yes                    | Yes                                    |
+| Site resets rate repeatedly                | Yes  | Yes                    | --                                     |
+| User unmutes or changes speed during ad    | Yes  | Yes                    | Yes                                    |
+| SPA navigation mid-ad                      | Yes  | Yes                    | Yes                                    |
+| `<video>` replaced mid-pod                 | Yes  | Yes                    | --                                     |
+| Extension disabled / reloaded mid-ad       | Yes  | Yes                    | Yes                                    |
+| Netflix ad break, intro, recap             | Yes  | Yes                    | Ad-tier account only                   |
 
 ### Selector maintenance
 
@@ -772,3 +811,24 @@ Add unit tests for formatting and settings round-trips.
 - [ ] Privacy statement: no data leaves the device
 - [ ] Version bumped in `package.json`; zips and AMO source archive built
 - [ ] Safari app signed and submitted via App Store Connect
+
+## Resolved decisions
+
+Places where the plan was ambiguous or self-contradictory, resolved with the owner on
+2026-10-28. They override the text above where they conflict.
+
+- **D1 — Bridge output path.** §4.1 listed the MAIN-world content script as
+  `content-scripts/youtube-bridge.js`, while its `web_accessible_resources` entry, the §4.2
+  loader and the §1 file name all point to a root `youtube-bridge.js`. Decision: build one root
+  `youtube-bridge.js` (from `src/entrypoints/youtube-bridge.ts`, a WXT unlisted script) and
+  reference it from both the `world: "MAIN"` content-script entry and
+  `web_accessible_resources`.
+- **D2 — Where `bootstrap(id)` lives.** §2.2 calls `bootstrap('youtube')` without naming its
+  file. It needs both the registry and the Controller, so it can't live in `core/` or
+  `platforms/`, and WXT treats every file in `entrypoints/` as an entrypoint. Decision:
+  `src/bootstrap.ts`, at the entrypoint layer.
+- **D3 — State names.** The §1 tree comment said `IDLE / AD_ACTIVE / AD_TRANSITION /
+RESTORING`; §3.1 defines five states. Decision: §3.1's `IDLE / BOOSTING / EXIT_PENDING /
+CONTESTED / RESTORING` (tree comment corrected).
+- **D4 — Netflix `run_at`.** §2.2's example stub uses `document_start`; §4.1 gives Netflix
+  `document_idle`. Decision: `document_idle`, per §4.1.

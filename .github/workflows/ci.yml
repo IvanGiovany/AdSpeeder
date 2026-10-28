@@ -1,0 +1,44 @@
+name: CI
+
+on:
+  push:
+    branches: ['**']
+    tags: ['v*']
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      # Specs arrive in Phase 3; until then an empty tests/e2e must not fail CI.
+      - run: npm run test:e2e -- --pass-with-no-tests
+      - run: npm run zip
+      - uses: actions/upload-artifact@v7
+        with:
+          name: zips
+          path: .output/*.zip
+
+  safari:
+    # §4.3: Safari builds run on a macOS runner on tags only.
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: check
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run build:safari

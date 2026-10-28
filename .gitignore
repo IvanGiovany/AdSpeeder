@@ -1,0 +1,12 @@
+node_modules/
+.output/
+.wxt/
+coverage/
+playwright-report/
+test-results/
+web-ext.config.ts
+*.log
+
+# Generated Xcode project (§1): ignored except its README.
+/safari/*
+!/safari/README.md

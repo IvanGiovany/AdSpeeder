@@ -1,0 +1,8 @@
+.output/
+.wxt/
+coverage/
+playwright-report/
+test-results/
+safari/
+package-lock.json
+*.pdf
