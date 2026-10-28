@@ -51,34 +51,134 @@ export function pickActiveVideo(
 
 /** Tries each selector in order and returns the first match plus its chain index. */
 export function queryChain<E extends Element = Element>(
-  _root: ParentNode,
-  _chain: readonly string[],
+  root: ParentNode,
+  chain: readonly string[],
 ): ChainMatch<E> | null {
-  throw new Error('not implemented');
+  for (const [index, selector] of chain.entries()) {
+    try {
+      const element = root.querySelector<E>(selector);
+      if (element) return { element, index };
+    } catch {
+      // An invalid selector in a chain must not break the others.
+    }
+  }
+  return null;
 }
 
-/** Resolves with the first element matching `chain`, or null when `signal` aborts. */
+/** Like queryChain, but returns every element matched by the first selector that matches. */
+export function queryAllChain(
+  root: ParentNode,
+  chain: readonly string[],
+): { elements: Element[]; index: number } | null {
+  for (const [index, selector] of chain.entries()) {
+    try {
+      const elements = [...root.querySelectorAll(selector)];
+      if (elements.length > 0) return { elements, index };
+    } catch {
+      // An invalid selector in a chain must not break the others.
+    }
+  }
+  return null;
+}
+
+/**
+ * Resolves with the first element matching `chain`, or null when `signal` aborts. Watches
+ * `root` (default: the document element) only until the element appears.
+ */
 export function waitForElement<E extends Element = Element>(
-  _chain: readonly string[],
-  _options: { root?: ParentNode; signal: AbortSignal },
+  chain: readonly string[],
+  options: { root?: ParentNode; signal: AbortSignal },
 ): Promise<ChainMatch<E> | null> {
-  throw new Error('not implemented');
+  const { signal } = options;
+  const root = options.root ?? document;
+  const found = queryChain<E>(root, chain);
+  if (found || signal.aborted) return Promise.resolve(found);
+  return new Promise((resolve) => {
+    const target = root instanceof Document ? root.documentElement : root;
+    const observer = new MutationObserver(() => {
+      const match = queryChain<E>(root, chain);
+      if (!match) return;
+      observer.disconnect();
+      resolve(match);
+    });
+    observer.observe(target, { childList: true, subtree: true });
+    signal.addEventListener(
+      'abort',
+      () => {
+        observer.disconnect();
+        resolve(null);
+      },
+      { once: true },
+    );
+  });
 }
 
 /** Observes attribute changes on `target`; disconnects when `signal` aborts. */
 export function observeAttr(
-  _target: Element,
-  _attributes: readonly string[],
-  _onChange: (records: MutationRecord[]) => void,
-  _signal: AbortSignal,
+  target: Element,
+  attributes: readonly string[],
+  onChange: (records: MutationRecord[]) => void,
+  signal: AbortSignal,
 ): void {
-  throw new Error('not implemented');
+  if (signal.aborted) return;
+  const observer = new MutationObserver(onChange);
+  observer.observe(target, { attributes: true, attributeFilter: [...attributes] });
+  signal.addEventListener(
+    'abort',
+    () => {
+      observer.disconnect();
+    },
+    { once: true },
+  );
 }
 
+/** Calls `fn` once calls stop for `ms`; a pending call is dropped when `signal` aborts. */
 export function debounce<A extends unknown[]>(
-  _fn: (...args: A) => void,
-  _ms: number,
-  _signal: AbortSignal,
+  fn: (...args: A) => void,
+  ms: number,
+  signal: AbortSignal,
 ): (...args: A) => void {
-  throw new Error('not implemented');
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  signal.addEventListener(
+    'abort',
+    () => {
+      if (timer !== null) clearTimeout(timer);
+    },
+    { once: true },
+  );
+  return (...args: A) => {
+    if (signal.aborted) return;
+    if (timer !== null) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      fn(...args);
+    }, ms);
+  };
+}
+
+/** Calls `fn` at most once per `ms` (leading and trailing); stops when `signal` aborts. */
+export function throttle(fn: () => void, ms: number, signal: AbortSignal): () => void {
+  let last = Number.NEGATIVE_INFINITY;
+  let trailing: ReturnType<typeof setTimeout> | null = null;
+  signal.addEventListener(
+    'abort',
+    () => {
+      if (trailing !== null) clearTimeout(trailing);
+    },
+    { once: true },
+  );
+  return () => {
+    if (signal.aborted || trailing !== null) return;
+    const wait = last + ms - Date.now();
+    if (wait <= 0) {
+      last = Date.now();
+      fn();
+      return;
+    }
+    trailing = setTimeout(() => {
+      trailing = null;
+      last = Date.now();
+      if (!signal.aborted) fn();
+    }, wait);
+  };
 }

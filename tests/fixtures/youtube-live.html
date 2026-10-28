@@ -1,0 +1,21 @@
+<!doctype html>
+<!--
+  Mid-roll on a live stream: mute only, never a rate boost.
+  YouTube-like player markup, local only: the e2e harness serves it under
+  https://www.youtube.com/watch?v=live and blocks every real network request.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: live</title>
+  </head>
+  <body data-scenario="live">
+    <div id="movie_player" class="html5-video-player ytp-live">
+      <div class="html5-video-container">
+        <video class="html5-main-video" loop playsinline></video>
+      </div>
+      <div class="video-ads ytp-ad-module"></div>
+    </div>
+    <script src="/__fixtures/driver.js"></script>
+  </body>
+</html>

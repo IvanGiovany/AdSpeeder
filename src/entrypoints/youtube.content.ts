@@ -6,5 +6,5 @@ export default defineContentScript({
   matches: [...def('youtube').matches],
   runAt: 'document_start',
   allFrames: false,
-  main: () => bootstrap('youtube'),
+  main: (ctx) => bootstrap('youtube', ctx),
 });

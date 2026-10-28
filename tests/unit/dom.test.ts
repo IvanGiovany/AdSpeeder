@@ -1,5 +1,14 @@
-import { afterEach, describe, expect, it } from 'vitest';
-import { childController, pickActiveVideo } from '../../src/shared/dom';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import {
+  childController,
+  debounce,
+  observeAttr,
+  pickActiveVideo,
+  queryAllChain,
+  queryChain,
+  throttle,
+  waitForElement,
+} from '../../src/shared/dom';
 import { FakeVideo } from './helpers/FakeVideo';
 
 afterEach(() => {
@@ -53,5 +62,92 @@ describe('pickActiveVideo (§3.6)', () => {
     const loading = sized(new FakeVideo({ readyState: 0 }), 640, 360);
     expect(pickActiveVideo([loading])).toBe(loading);
     expect(pickActiveVideo([])).toBeNull();
+  });
+});
+
+describe('queryChain / queryAllChain', () => {
+  it('returns the first match and its chain index, skipping invalid selectors', () => {
+    document.body.innerHTML = '<div class="b"></div><div class="b"></div>';
+    expect(queryChain(document, ['.a', '::bad(', '.b'])?.index).toBe(2);
+    expect(queryChain(document, ['.a'])).toBeNull();
+    expect(queryAllChain(document, ['.a', '[', '.b'])).toMatchObject({ index: 2 });
+    expect(queryAllChain(document, ['.b'])?.elements).toHaveLength(2);
+    expect(queryAllChain(document, ['.a'])).toBeNull();
+  });
+});
+
+describe('waitForElement', () => {
+  it('resolves at once when present, later when inserted, null on abort', async () => {
+    document.body.innerHTML = '<p id="now"></p>';
+    const lifetime = new AbortController();
+    await expect(waitForElement(['#now'], { signal: lifetime.signal })).resolves.toMatchObject({
+      index: 0,
+    });
+    const later = waitForElement(['#missing', '#later'], { signal: lifetime.signal });
+    document.body.append(Object.assign(document.createElement('p'), { id: 'later' }));
+    await expect(later).resolves.toMatchObject({ index: 1 });
+    const never = waitForElement(['#never'], { signal: lifetime.signal });
+    lifetime.abort();
+    await expect(never).resolves.toBeNull();
+  });
+});
+
+describe('observeAttr', () => {
+  it('reports watched attribute changes until aborted', async () => {
+    const el = document.body.appendChild(document.createElement('div'));
+    const seen: string[] = [];
+    const lifetime = new AbortController();
+    observeAttr(
+      el,
+      ['class'],
+      (records) => seen.push(...records.map((r) => r.attributeName ?? '')),
+      lifetime.signal,
+    );
+    el.className = 'x';
+    el.title = 'ignored';
+    await new Promise((r) => setTimeout(r, 0));
+    lifetime.abort();
+    el.className = 'y';
+    await new Promise((r) => setTimeout(r, 0));
+    expect(seen).toEqual(['class']);
+  });
+});
+
+describe('debounce / throttle', () => {
+  it('debounce calls once after calls stop, and never after abort', () => {
+    vi.useFakeTimers();
+    const fn = vi.fn();
+    const lifetime = new AbortController();
+    const d = debounce(fn, 100, lifetime.signal);
+    d(1);
+    d(2);
+    vi.advanceTimersByTime(100);
+    expect(fn).toHaveBeenCalledExactlyOnceWith(2);
+    d(3);
+    lifetime.abort();
+    vi.advanceTimersByTime(100);
+    d(4);
+    vi.advanceTimersByTime(100);
+    expect(fn).toHaveBeenCalledOnce();
+    vi.useRealTimers();
+  });
+
+  it('throttle calls on the leading edge and once on the trailing edge', () => {
+    vi.useFakeTimers();
+    const fn = vi.fn();
+    const lifetime = new AbortController();
+    const t = throttle(fn, 100, lifetime.signal);
+    t();
+    t();
+    t();
+    expect(fn).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(100);
+    expect(fn).toHaveBeenCalledTimes(2);
+    t();
+    lifetime.abort();
+    vi.advanceTimersByTime(100);
+    t();
+    expect(fn).toHaveBeenCalledTimes(2);
+    vi.useRealTimers();
   });
 });

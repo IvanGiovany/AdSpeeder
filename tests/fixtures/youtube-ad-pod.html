@@ -1,9 +1,21 @@
 <!doctype html>
-<!-- Placeholder: YouTube pre-roll pod of 2 with class flicker (Phase 3). Local only; tests never load the real site. -->
+<!--
+  Pre-roll pod of 2 with class flicker between the ads (§5 Phase 3).
+  YouTube-like player markup, local only: the e2e harness serves it under
+  https://www.youtube.com/watch?v=ad-pod and blocks every real network request.
+-->
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>youtube-ad-pod</title>
+    <title>Fixture: ad-pod</title>
   </head>
-  <body></body>
+  <body data-scenario="ad-pod">
+    <div id="movie_player" class="html5-video-player">
+      <div class="html5-video-container">
+        <video class="html5-main-video" loop playsinline></video>
+      </div>
+      <div class="video-ads ytp-ad-module"></div>
+    </div>
+    <script src="/__fixtures/driver.js"></script>
+  </body>
 </html>

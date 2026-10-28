@@ -1,0 +1,182 @@
+<!doctype html>
+<!--
+  Manual rate probe (§5 Phase 3 item 8). Open this file directly (file://) in each browser.
+  It plays the short local clip, tries each ladder value, and reports whether the browser
+  accepted, rejected (threw) or silently capped it. Copy the Markdown row into
+  docs/selector-log.md. Nothing is loaded from the network.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>AdSpeeder rate probe</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        font-family: system-ui, sans-serif;
+      }
+      body {
+        max-width: 760px;
+        margin: 24px auto;
+        padding: 0 16px;
+        line-height: 1.4;
+      }
+      video {
+        width: 320px;
+        max-width: 100%;
+        background: #000;
+      }
+      table {
+        border-collapse: collapse;
+        margin: 12px 0;
+      }
+      th,
+      td {
+        border: 1px solid currentColor;
+        padding: 4px 10px;
+        text-align: left;
+      }
+      .accepted {
+        color: #2e7d32;
+      }
+      .rejected {
+        color: #c62828;
+      }
+      .capped {
+        color: #ef6c00;
+      }
+      pre {
+        white-space: pre-wrap;
+        border: 1px solid currentColor;
+        padding: 8px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>AdSpeeder rate probe</h1>
+    <p>
+      Tries the engine's ladder (16, 8, 4, 2) plus two out-of-range values on a playing local clip.
+      "Capped" means the write did not throw but <code>playbackRate</code> reads back as a different
+      value, which the engine treats as a rejection (D5).
+    </p>
+    <video id="v" playsinline muted loop controls></video>
+    <p><button id="run" type="button">Run probe</button> <span id="status">Idle.</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Rate</th>
+          <th>Result</th>
+          <th>Read back (now / after 300 ms)</th>
+          <th>Note</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <h2>For docs/selector-log.md</h2>
+    <pre id="markdown">Run the probe first.</pre>
+    <script>
+      'use strict';
+      const LADDER = [16, 8, 4, 2];
+      const EXTRA = [32, 0.0625];
+      const SOURCES = ['media/clip.mp4', 'media/tone.wav'];
+      const v = document.getElementById('v');
+      const status = document.getElementById('status');
+      const rows = document.getElementById('rows');
+      const markdown = document.getElementById('markdown');
+      const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+      const same = (a, b) => Math.abs(a - b) < 1e-3;
+
+      async function load() {
+        for (const src of SOURCES) {
+          const ok = await new Promise((resolve) => {
+            v.addEventListener('canplay', () => resolve(true), { once: true });
+            v.addEventListener('error', () => resolve(false), { once: true });
+            v.src = src;
+          });
+          if (ok) return src;
+        }
+        throw new Error('neither local clip could be played');
+      }
+
+      async function probe(rate) {
+        v.playbackRate = 1;
+        await sleep(50);
+        let changed = false;
+        const onChange = () => (changed = true);
+        v.addEventListener('ratechange', onChange);
+        let result;
+        let now = null;
+        let later = null;
+        let note = '';
+        try {
+          v.playbackRate = rate;
+          now = v.playbackRate;
+          await sleep(300);
+          later = v.playbackRate;
+          result = same(now, rate) && same(later, rate) ? 'accepted' : 'capped';
+          if (result === 'capped') note = 'capped to ' + (same(now, rate) ? later : now);
+        } catch (error) {
+          result = 'rejected';
+          note = error && error.name ? error.name : String(error);
+        }
+        v.removeEventListener('ratechange', onChange);
+        if (result !== 'rejected' && !changed) note = (note ? note + '; ' : '') + 'no ratechange';
+        return { rate, result, now, later, note };
+      }
+
+      function render(results, src) {
+        rows.replaceChildren(
+          ...results.map((r) => {
+            const tr = document.createElement('tr');
+            for (const [text, cls] of [
+              [String(r.rate), ''],
+              [r.result, r.result],
+              [r.now === null ? '—' : r.now + ' / ' + r.later, ''],
+              [r.note, ''],
+            ]) {
+              const td = document.createElement('td');
+              td.textContent = text;
+              if (cls) td.className = cls;
+              tr.append(td);
+            }
+            return tr;
+          }),
+        );
+        const cell = (rate) => {
+          const r = results.find((x) => x.rate === rate);
+          return r.result === 'capped' ? 'capped (' + (r.later ?? r.now) + ')' : r.result;
+        };
+        const ladder = LADDER.map(cell).join(' | ');
+        markdown.textContent =
+          '| ' +
+          new Date().toISOString().slice(0, 10) +
+          ' | ' +
+          navigator.userAgent +
+          ' | ' +
+          src +
+          ' | ' +
+          ladder +
+          ' | ' +
+          EXTRA.map((x) => x + ': ' + cell(x)).join(', ') +
+          ' |\n\nJSON: ' +
+          JSON.stringify({ userAgent: navigator.userAgent, src, results });
+      }
+
+      document.getElementById('run').addEventListener('click', async () => {
+        try {
+          status.textContent = 'Loading clip…';
+          const src = await load();
+          await v.play();
+          status.textContent = 'Probing ' + src + '…';
+          const results = [];
+          for (const rate of [...LADDER, ...EXTRA]) results.push(await probe(rate));
+          v.playbackRate = 1;
+          render(results, src);
+          status.textContent = 'Done.';
+        } catch (error) {
+          status.textContent = 'Failed: ' + (error && error.message ? error.message : error);
+        }
+      });
+    </script>
+  </body>
+</html>

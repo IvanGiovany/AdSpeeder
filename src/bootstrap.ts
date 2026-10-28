@@ -1,21 +1,33 @@
+import { Controller } from './core/Controller';
+import { def } from './platforms/registry';
 import { createLogger } from './shared/logger';
-import { getSettings, type PlatformId } from './shared/settings';
+import { getSettings, subscribeSettings, type PlatformId } from './shared/settings';
 
 /**
- * Shared body of every `<id>.content.ts` (§2.2). Lives outside entrypoints/ because WXT treats
- * every file there as an entrypoint; it sits at the entrypoint layer, so it may import core/
- * and platforms/.
+ * Shared body of every `<id>.content.ts` (§2.2, D2): reads settings, picks the adapter from the
+ * registry, constructs the Controller and keeps it in sync with settings. Everything hangs off
+ * `ctx.signal` (WXT aborts it when the extension context goes away), so it tears down on unload.
  *
- * Phase 1 scaffold: reads settings and exits. It deliberately doesn't throw, so loading the
- * unpacked build doesn't put errors on real pages. Phase 3 constructs `def(id).create()` and a
- * Controller here.
+ * It runs even while the extension or platform is switched off: the Controller then does
+ * nothing, and switching on takes effect without a reload.
  */
-export async function bootstrap(id: PlatformId): Promise<void> {
-  const settings = await getSettings();
+export async function bootstrap(id: PlatformId, ctx: { signal: AbortSignal }): Promise<void> {
+  let settings = await getSettings();
+  if (ctx.signal.aborted) return;
   const log = createLogger(id, { isDebug: () => settings.debug });
-  if (!settings.enabled || !settings.platforms[id]) {
-    log.debug('disabled in settings; exiting');
-    return;
-  }
-  log.debug('scaffold only: detection is not implemented yet');
+  const controller = new Controller({
+    adapter: def(id).create(),
+    settings,
+    log,
+    signal: ctx.signal,
+  });
+  subscribeSettings(
+    (next) => {
+      settings = next;
+      controller.updateSettings(next);
+    },
+    { signal: ctx.signal },
+  );
+  await controller.start();
+  log.debug('started');
 }

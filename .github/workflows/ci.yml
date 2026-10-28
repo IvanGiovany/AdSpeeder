@@ -21,8 +21,8 @@ jobs:
       - run: npm test
       - run: npm run build
       - run: npx playwright install --with-deps chromium
-      # Specs arrive in Phase 3; until then an empty tests/e2e must not fail CI.
-      - run: npm run test:e2e -- --pass-with-no-tests
+      # Loads the Chromium build from `npm run build` against local fixtures only.
+      - run: npm run test:e2e
       - run: npm run zip
       - uses: actions/upload-artifact@v7
         with:

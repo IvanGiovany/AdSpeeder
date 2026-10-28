@@ -52,7 +52,44 @@ export interface SignalScore {
   reasons: string[];
 }
 
-/** `confidence = min(1, Σ weight of active signals)` plus the dominant kind and pod info. */
-export function scoreSignals(_signals: readonly AdSignal[]): SignalScore {
-  throw new Error('not implemented');
+/** Tie-break order when two kinds carry the same weight: an ad always wins. */
+const KIND_PRIORITY: readonly SegmentKind[] = ['ad', 'promo', 'recap', 'intro'];
+
+/**
+ * `confidence = min(1, Σ weight of active signals)` (§2.1), plus the kind with the most active
+ * weight, the first pod info and the sources that fired. Raw: no hysteresis (D8).
+ */
+export function scoreSignals(signals: readonly AdSignal[]): SignalScore {
+  const active = signals.filter((s) => s.active && s.weight > 0);
+  const total = active.reduce((sum, s) => sum + s.weight, 0);
+  // Rounded so 0.1 + 0.2 style float noise can't flip a threshold comparison.
+  const confidence = Math.min(1, Math.round(total * 1e6) / 1e6);
+  const byKind = new Map<SegmentKind, number>();
+  for (const s of active) byKind.set(s.kind, (byKind.get(s.kind) ?? 0) + s.weight);
+  let kind: SegmentKind | null = null;
+  for (const candidate of KIND_PRIORITY) {
+    const weight = byKind.get(candidate) ?? 0;
+    if (weight > 0 && (kind === null || weight > (byKind.get(kind) ?? 0))) kind = candidate;
+  }
+  const pod = active.find((s) => s.pod)?.pod;
+  return { confidence, kind, reasons: active.map((s) => s.source), ...(pod && { pod }) };
+}
+
+export const EMPTY_SNAPSHOT: AdStateSnapshot = {
+  active: false,
+  kind: null,
+  confidence: 0,
+  reasons: [],
+};
+
+export function sameSnapshot(a: AdStateSnapshot, b: AdStateSnapshot): boolean {
+  return (
+    a.active === b.active &&
+    a.kind === b.kind &&
+    a.confidence === b.confidence &&
+    a.pod?.index === b.pod?.index &&
+    a.pod?.total === b.pod?.total &&
+    a.ssaiSuspected === b.ssaiSuspected &&
+    a.reasons.join() === b.reasons.join()
+  );
 }
