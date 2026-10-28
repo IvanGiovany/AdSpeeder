@@ -187,12 +187,20 @@ export class Controller {
     // D14: scoped to the adapter's interaction root when it has one. Filtering on document
     // (rather than listening on the root) keeps working when the root appears late or is replaced.
     const noteInput = (event: Event) => {
-      if (event.isTrusted && this.isPlayerInteraction(event.target)) {
+      if (event.isTrusted && this.isPlayerInteraction(event)) {
         this.lastTrustedInputAt = this.now();
       }
     };
     document.addEventListener('pointerdown', noteInput, { capture: true, signal });
     document.addEventListener('keydown', noteInput, { capture: true, signal });
+    // D19: background tabs throttle timers, so the cap is also checked here.
+    document.addEventListener(
+      'visibilitychange',
+      () => {
+        this.checkCapDeadline();
+      },
+      { signal },
+    );
     window.addEventListener(
       'pagehide',
       () => {
@@ -384,7 +392,9 @@ export class Controller {
     v.addEventListener(
       'timeupdate',
       () => {
-        if (isBoosted()) this.meter.sample(v.currentTime);
+        if (!isBoosted()) return;
+        this.meter.sample(v.currentTime);
+        this.checkCapDeadline();
       },
       { signal },
     );
@@ -427,12 +437,20 @@ export class Controller {
     return this.now() - this.lastTrustedInputAt <= TRUSTED_INPUT_WINDOW_MS;
   }
 
-  /** D14: ignore typing in editable fields, and input outside the adapter's interaction root. */
-  private isPlayerInteraction(target: EventTarget | null): boolean {
+  /**
+   * D14: ignore typing in editable fields, and input outside the adapter's interaction root.
+   * D15: with a root, a keydown on <body>/<html> (nothing focused) still counts when its key is
+   * one of the adapter's page-wide media shortcuts.
+   */
+  private isPlayerInteraction(event: Event): boolean {
+    const target = event.target;
     if (!(target instanceof Element)) return true;
     if (target.closest(EDITABLE_TARGET)) return false;
     const root = this.adapter.getInteractionRoot?.() ?? null;
-    return root === null || root.contains(target);
+    if (root === null || root.contains(target)) return true;
+    const unfocused = target === document.body || target === document.documentElement;
+    if (!unfocused || !(event instanceof KeyboardEvent)) return false;
+    return this.adapter.getMediaShortcutKeys?.().includes(event.key) ?? false;
   }
 
   private dispatch(event: MachineEvent): void {
@@ -529,15 +547,36 @@ export class Controller {
     const mode: CapMode = rateBoosted ? 'boosted' : 'muted-only';
     if (this.capTimer !== null && this.capMode === mode) return;
     this.clearCapTimer();
-    const limit = mode === 'boosted' ? this.maxBoostedMs : this.maxMutedOnlyMs;
-    const remaining = Math.max(0, limit - (this.now() - this.segmentStartedAt));
+    const remaining = Math.max(0, this.capLimit(mode) - (this.now() - this.segmentStartedAt));
     this.capMode = mode;
     this.capTimer = setTimeout(() => {
       this.capTimer = null;
-      this.log.warn('detection-lost', { ...this.diagnostics(), cap: mode, limitMs: limit });
-      this.suppressed = true;
-      this.forceRestore(mode === 'boosted' ? 'max-boosted' : 'max-muted-only');
+      this.fireCap(mode);
     }, remaining);
+  }
+
+  private capLimit(mode: CapMode): number {
+    return mode === 'boosted' ? this.maxBoostedMs : this.maxMutedOnlyMs;
+  }
+
+  /**
+   * D19: the timer may be throttled in a background tab, so timeupdate and visibilitychange
+   * also compare the clock against the cap. Elapsed time is always clock-based.
+   */
+  private checkCapDeadline(): void {
+    const mode = this.capMode;
+    if (mode === null || this.segmentStartedAt === null) return;
+    if (this.now() - this.segmentStartedAt >= this.capLimit(mode)) this.fireCap(mode);
+  }
+
+  private fireCap(mode: CapMode): void {
+    this.log.warn('detection-lost', {
+      ...this.diagnostics(),
+      cap: mode,
+      limitMs: this.capLimit(mode),
+    });
+    this.suppressed = true;
+    this.forceRestore(mode === 'boosted' ? 'max-boosted' : 'max-muted-only');
   }
 
   private armGuard(): void {

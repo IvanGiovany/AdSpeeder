@@ -784,3 +784,106 @@ describe('diagnostics in logs', () => {
     expect(h.log.warn).not.toHaveBeenCalledWith('selector-drift', expect.anything());
   });
 });
+
+describe('page-wide media shortcuts (D15)', () => {
+  const SHORTCUTS = ['m', 'M', '<', '>'];
+
+  function trustedKey(target: EventTarget, key: string): void {
+    const event = new KeyboardEvent('keydown', { key, bubbles: true });
+    Object.defineProperty(event, 'isTrusted', { value: true });
+    target.dispatchEvent(event);
+  }
+
+  async function scopedHarness(keys?: readonly string[]): Promise<Harness> {
+    const root = document.createElement('div');
+    document.body.append(root);
+    const h = await setup({
+      configure: (a) => {
+        a.getInteractionRoot = () => root;
+        if (keys) a.getMediaShortcutKeys = () => keys;
+      },
+    });
+    h.adapter.emit(adSnapshot());
+    return h;
+  }
+
+  /** Presses `key` on `target`, then unmutes; returns whether the unmute was kept as the user's. */
+  async function unmuteKeptAfter(h: Harness, target: EventTarget, key: string): Promise<boolean> {
+    trustedKey(target, key);
+    h.video.setMuted(false);
+    await flushMicrotasks();
+    const kept = !h.video.muted;
+    vi.advanceTimersByTime(600); // let the trusted-input window lapse before the next case
+    return kept;
+  }
+
+  it.each([' ', 'k'])('%j on <body> does not count as user input', async (key) => {
+    const h = await scopedHarness(SHORTCUTS);
+    expect(await unmuteKeptAfter(h, document.body, key)).toBe(false);
+  });
+
+  it.each(SHORTCUTS)('%j on <body> or <html> counts as user input', async (key) => {
+    const h = await scopedHarness(SHORTCUTS);
+    expect(await unmuteKeptAfter(h, document.body, key)).toBe(true);
+    h.adapter.emit(IDLE_SNAPSHOT);
+    vi.advanceTimersByTime(300);
+    h.adapter.emit(adSnapshot());
+    expect(await unmuteKeptAfter(h, document.documentElement, key)).toBe(true);
+  });
+
+  it('a shortcut key on a focused element outside the root does not count', async () => {
+    const h = await scopedHarness(SHORTCUTS);
+    const outside = document.body.appendChild(document.createElement('button'));
+    expect(await unmuteKeptAfter(h, outside, 'm')).toBe(false);
+  });
+
+  it('any key counts inside the interaction root', async () => {
+    const h = await scopedHarness(SHORTCUTS);
+    const root = h.adapter.getInteractionRoot?.();
+    expect(root).toBeTruthy();
+    if (!root) return;
+    expect(await unmuteKeptAfter(h, root, 'k')).toBe(true);
+  });
+
+  it('without getMediaShortcutKeys, no key on <body> counts (default: none)', async () => {
+    const h = await scopedHarness();
+    expect(await unmuteKeptAfter(h, document.body, 'm')).toBe(false);
+  });
+});
+
+describe('cap check when timers are throttled (D19)', () => {
+  /** A clock that moves independently of timers, as in a throttled background tab. */
+  async function throttledHarness() {
+    let clock = 0;
+    const h = await setup({ controller: { now: () => clock } });
+    h.adapter.emit(adSnapshot());
+    return {
+      h,
+      skip: (ms: number) => {
+        clock += ms;
+      },
+    };
+  }
+
+  it('a timeupdate past the cap restores even though the cap timer never fired', async () => {
+    const { h, skip } = await throttledHarness();
+    skip(MAX_BOOSTED_MS - 1);
+    h.video.advance(1);
+    expect(phase(h)).toBe('BOOSTING');
+    skip(1);
+    h.video.advance(1);
+    expect(phase(h)).toBe('IDLE');
+    expect(h.video.playbackRate).toBe(1.5);
+    expect(h.log.warn).toHaveBeenCalledWith(
+      'detection-lost',
+      expect.objectContaining({ cap: 'boosted' }),
+    );
+  });
+
+  it('visibilitychange past the cap restores too', async () => {
+    const { h, skip } = await throttledHarness();
+    skip(MAX_BOOSTED_MS);
+    document.dispatchEvent(new Event('visibilitychange'));
+    expect(phase(h)).toBe('IDLE');
+  });
+});

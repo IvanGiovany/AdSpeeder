@@ -52,6 +52,7 @@ export class FakeAdapter implements PlatformAdapter {
   ctx: AdapterContext | null = null;
   /** Optional contract methods (D14, diagnostics); tests assign them when needed. */
   getInteractionRoot?: () => Element | null;
+  getMediaShortcutKeys?: () => readonly string[];
   getDiagnostics?: () => AdapterDiagnostics;
   destroyed = false;
   private snapshot: AdStateSnapshot = IDLE_SNAPSHOT;

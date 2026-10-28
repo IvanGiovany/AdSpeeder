@@ -386,7 +386,8 @@ limit depends on the current mode: `maxBoostedMs` = 90 s while the rate is boost
 `maxMutedOnlyMs` = 300 s when it is not (mute-only capability, `CONTESTED`, or a user speed
 override). A mode change re-arms the cap without resetting the time already spent. When a cap
 fires, the engine restores and logs `detection-lost`, and it does not re-boost until the segment
-is over (§2.1).
+is over (§2.1). Because background tabs throttle timers, the elapsed time is also checked
+against the clock on every `timeupdate` during a segment and on `visibilitychange` (D19).
 
 **Force-restore triggers**, valid from any state: navigation, adapter `destroy`, `pagehide`,
 user toggles off, platform disabled in settings, a segment cap reached, orphaned extension
@@ -464,7 +465,10 @@ across loads.
   `[contenteditable]` is ignored. When the adapter implements `getInteractionRoot()` and it
   returns an element, only input inside that element counts; otherwise the whole document does.
   The listener sits on `document` and checks containment per event, so a root that appears late
-  or is replaced by SPA navigation keeps working. A `volumechange` that unmutes within 500 ms of trusted
+  or is replaced by SPA navigation keeps working (D16). With a root, a trusted `keydown` on
+  `<body>` or `<html>` (nothing focused) still counts when `e.key` is one of the adapter's
+  `getMediaShortcutKeys()`; YouTube's are `m`, `M`, `<`, `>`; the default is none (D15). A
+  `volumechange` that unmutes within 500 ms of trusted
   input marks `userOverride.mute` for the current segment; the engine stops re-muting until the
   segment ends. Restore then leaves `muted` as the user set it.
 - **User changes speed during an ad:** same rule via `ratechange` → `userOverride.rate`;
@@ -939,3 +943,17 @@ Places where the plan was ambiguous or self-contradictory, resolved with the own
   `SELECTORS_VERSION` is a string. YouTube implements it in Phase 3.
 - **Real speed limits.** Phase 3 adds `tests/fixtures/rate-probe.html` (item 8) for manual runs
   in Firefox and Safari; results go in `docs/selector-log.md`.
+- **D15 — Page-wide media shortcuts.** With an interaction root, a trusted `keydown` whose target
+  is `<body>` or `<html>` counts as user input only if `e.key` is in the adapter's optional
+  `getMediaShortcutKeys()` (default: none). YouTube's constant is `m`, `M`, `<`, `>`. Inside the
+  root any key counts. Space and `k` on `<body>` do not count. (§3.3)
+- **D16 — Interaction root checked per event.** The capture listener stays on `document` and
+  accepts an event only if its target is inside `getInteractionRoot()`, so a late or replaced
+  root keeps working. (§3.3)
+- **D17 — Selector drift counted by `Controller`.** Each watch page is checked as it is left,
+  using `getDiagnostics()`; 3 consecutive pages with any chain index > 0 log `selector-drift`.
+  (§2.3)
+- **D18 — A user speed override counts as "rate not boosted"** and moves the segment to the
+  300 s muted-only cap. (§3.1)
+- **D19 — Cap check survives timer throttling.** Elapsed time is clock-based; besides the timer,
+  the cap is checked on every `timeupdate` during a segment and on `visibilitychange`. (§3.1)

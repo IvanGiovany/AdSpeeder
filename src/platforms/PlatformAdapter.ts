@@ -41,6 +41,12 @@ export interface PlatformAdapter {
   destroy(): void;
   /** D14: element that scopes trusted-input detection (e.g. the player root); null → document. */
   getInteractionRoot?(): Element | null;
+  /**
+   * Keys (`KeyboardEvent.key`) that are page-wide media shortcuts: a trusted keydown on
+   * <body>/<html> with one of these counts as user input even outside the interaction root.
+   * Default: none.
+   */
+  getMediaShortcutKeys?(): readonly string[];
   getDiagnostics?(): AdapterDiagnostics;
 }
 
