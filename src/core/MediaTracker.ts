@@ -1,4 +1,5 @@
 import type { PlatformAdapter } from '../platforms/PlatformAdapter';
+import { childController } from '../shared/dom';
 
 /** The minimal adapter surface MediaTracker depends on (§3.6). */
 export type VideoSource = Pick<PlatformAdapter, 'getVideoElement' | 'onVideoElementChange'>;
@@ -9,36 +10,61 @@ export type VideoChangeListener = (
 ) => void;
 
 /**
- * Of several candidates, picks the connected element with the largest on-screen area and
- * readyState ≥ 2, preferring one inside `preferredRoot`.
+ * Follows the adapter's current `<video>`. Each binding gets its own AbortController, so
+ * per-element listeners registered with `bindingSignal` are torn down when the node changes.
  */
-export function pickActiveVideo(
-  _candidates: readonly HTMLVideoElement[],
-  _preferredRoot?: Element | null,
-): HTMLVideoElement | null {
-  throw new Error('not implemented');
-}
-
 export class MediaTracker {
+  private video: HTMLVideoElement | null = null;
+  private binding: AbortController;
+  private readonly listeners = new Set<VideoChangeListener>();
+  private started = false;
+
   constructor(
     private readonly source: VideoSource,
     private readonly signal: AbortSignal,
-  ) {}
+  ) {
+    this.binding = childController(signal);
+  }
 
   get current(): HTMLVideoElement | null {
-    throw new Error('not implemented');
+    return this.video;
   }
 
-  /** Signal aborted when the current binding changes; use it for per-element listeners. */
+  /** Aborted when the current binding changes or the tracker's signal aborts. */
   get bindingSignal(): AbortSignal {
-    throw new Error('not implemented');
+    return this.binding.signal;
   }
 
-  onChange(_listener: VideoChangeListener): () => void {
-    throw new Error('not implemented');
+  onChange(listener: VideoChangeListener): () => void {
+    this.listeners.add(listener);
+    return () => {
+      this.listeners.delete(listener);
+    };
   }
 
   start(): void {
-    throw new Error('not implemented');
+    if (this.started || this.signal.aborted) return;
+    this.started = true;
+    const unsubscribe = this.source.onVideoElementChange((v) => {
+      this.update(v);
+    });
+    this.signal.addEventListener(
+      'abort',
+      () => {
+        unsubscribe();
+        this.listeners.clear();
+      },
+      { once: true },
+    );
+    this.update(this.source.getVideoElement());
+  }
+
+  private update(next: HTMLVideoElement | null): void {
+    if (next === this.video || this.signal.aborted) return;
+    const prev = this.video;
+    this.binding.abort();
+    this.binding = childController(this.signal);
+    this.video = next;
+    for (const listener of [...this.listeners]) listener(next, prev);
   }
 }

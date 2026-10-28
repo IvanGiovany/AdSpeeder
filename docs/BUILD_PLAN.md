@@ -95,7 +95,8 @@ adspeeder/
 │   │   ├── RateGuard.ts          # defends against site rate resets
 │   │   ├── MediaTracker.ts       # finds and re-binds the active <video>
 │   │   ├── RateProbe.ts          # max-supported-rate ladder per element
-│   │   └── SessionSnapshot.ts    # saved user volume/mute/rate
+│   │   ├── SessionSnapshot.ts    # saved user volume/mute/rate
+│   │   └── StatsMeter.ts         # time saved + ads counted while boosting (D6)
 │   ├── platforms/
 │   │   ├── PlatformAdapter.ts    # interface + base class
 │   │   ├── registry.ts           # hostname → adapter factory
@@ -397,8 +398,10 @@ export class VideoEngine {
 2. `target = min(settings.speed, probe.maxFor(v), capabilities.maxRateHint ?? ∞)`.
 3. Set `v.muted = true` (only if `allowMute` and the user has not unmuted this segment). Leave
    `volume` untouched, so restore never has to guess it.
-4. Set `v.playbackRate = target` inside `try/catch`. On `NotSupportedError`, tell `RateProbe`
-   to lower the ceiling and retry once with the next ladder value.
+4. Set `v.playbackRate = target` inside `try/catch`, then read `playbackRate` back. A
+   `NotSupportedError` or a read-back that doesn't match (the browser silently capped the rate)
+   both count as a rejection: tell `RateProbe` to lower the ceiling and retry with the next
+   ladder value until a write sticks (D5).
 5. Write a crash marker: `v.dataset.adspeederBoosted = JSON.stringify(snapshot)`.
 
 **Restoring**
@@ -486,6 +489,10 @@ measured from `currentTime` and `performance.now()` deltas on `timeupdate`. Cont
 batch `{ platform, adsSeen, secondsSaved }` to the background every 10 s and on segment end;
 the background sums them into `storage.local` with daily buckets kept for 30 days.
 
+`core/StatsMeter.ts` does the measuring while `BOOSTING` and counts each pod index increment as
+a new ad; `Controller` sends the batches; `shared/stats.ts` aggregates, prunes and answers a
+`getStats` message (D6).
+
 ## 4. Cross-Browser Manifest V3 & Build Pipeline
 
 Use WXT with TypeScript: it generates a correct MV3 manifest per browser from one config,
@@ -562,7 +569,7 @@ script is declared statically and exits on its first line unless the user has en
 | --------------------- | --------------------------------------- | -------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- |
 | Background            | `service_worker`                        | `background.scripts` (event page); WXT emits it                                                                            | WXT's Safari target; confirm in Xcode build                            |
 | Extension ID          | Store-assigned                          | `browser_specific_settings.gecko.id` + `strict_min_version` required                                                       | Bundle identifier in the Xcode project                                 |
-| `world: "MAIN"`       | Supported (Chrome 111+)                 | Supported in recent versions; set `strict_min_version` accordingly                                                         | Treat as unsupported; use the `<script src>` injection fallback        |
+| `world: "MAIN"`       | Supported (Chrome 111+)                 | `strict_min_version` 140 (Android 142), which AMO's data-collection declaration needs anyway                               | Treat as unsupported; use the `<script src>` injection fallback        |
 | Host permission grant | Granted at install                      | Check with `permissions.contains` at startup; popup shows a "Grant access" button calling `permissions.request` if missing | User enables per site in Safari settings; popup shows guidance         |
 | Max `playbackRate`    | Probe (expect 16)                       | Probe; audio is muted anyway                                                                                               | Probe                                                                  |
 | Packaging             | .zip to Chrome Web Store / Edge Add-ons | .zip + source archive to AMO                                                                                               | `xcrun safari-web-extension-converter` → Xcode app → App Store Connect |
@@ -653,9 +660,12 @@ with no manifest errors; the popup opens; settings unit tests cover defaults and
 
 ```text
 Read docs/BUILD_PLAN.md section 3. Implement src/core/ fully:
-1. RateProbe: per-element descending ladder [16, 8, 4, 2]; catch
-   NotSupportedError; cache the result in a WeakMap; expose maxFor(v) and
-   lowerCeiling(v).
+1. RateProbe: a pure ceiling cache that never writes to the element (D5):
+   WeakMap<HTMLVideoElement, number> seeded at 16; expose maxFor(v),
+   lowerCeiling(v) (steps down the ladder [16, 8, 4, 2]) and the ladder.
+   VideoEngine does the write-and-catch: after each write it reads
+   playbackRate back, treats a mismatch like NotSupportedError, calls
+   lowerCeiling and retries until a write sticks.
 2. VideoEngine exactly per 3.2 (snapshot WeakMap + dataset crash marker,
    boost, reassert, restore with 500 ms verification, transfer).
 3. RateGuard per 3.5 (target-echo filter, trusted-input window, token bucket
@@ -672,6 +682,13 @@ Read docs/BUILD_PLAN.md section 3. Implement src/core/ fully:
    reset loop ends in CONTESTED within budget; user unmute respected; navigation
    restores; detached element restore does not throw; restore returns to 1.5x
    when the user was at 1.5x.
+8. Stats (D6): core/StatsMeter.ts measures, while BOOSTING, media seconds
+   advanced against wall-clock seconds and counts ads (each pod index
+   increment is a new ad). Controller sends batches to the background every
+   10 s and when a segment ends. shared/stats.ts aggregates them into
+   storage.local daily buckets, deletes buckets older than 30 days, and
+   answers a getStats message. Unit-test the time-saved arithmetic, the
+   batching and the pruning.
 ```
 
 **Done when:** core coverage ≥ 90% lines; a grep for `playbackRate =` and `muted =` outside
@@ -827,8 +844,21 @@ Places where the plan was ambiguous or self-contradictory, resolved with the own
   file. It needs both the registry and the Controller, so it can't live in `core/` or
   `platforms/`, and WXT treats every file in `entrypoints/` as an entrypoint. Decision:
   `src/bootstrap.ts`, at the entrypoint layer.
-- **D3 — State names.** The §1 tree comment said `IDLE / AD_ACTIVE / AD_TRANSITION /
-RESTORING`; §3.1 defines five states. Decision: §3.1's `IDLE / BOOSTING / EXIT_PENDING /
-CONTESTED / RESTORING` (tree comment corrected).
+- **D3 — State names.** The §1 tree comment said `IDLE / AD_ACTIVE / AD_TRANSITION / RESTORING`;
+  §3.1 defines five states. Decision: §3.1's
+  `IDLE / BOOSTING / EXIT_PENDING / CONTESTED / RESTORING` (tree comment corrected).
 - **D4 — Netflix `run_at`.** §2.2's example stub uses `document_start`; §4.1 gives Netflix
   `document_idle`. Decision: `document_idle`, per §4.1.
+- **D5 — RateProbe vs. VideoEngine-only writes.** Probing a rate needs a `playbackRate` write,
+  which only `VideoEngine.ts` may do. Decision: `RateProbe` is a pure ceiling cache
+  (`WeakMap<HTMLVideoElement, number>` seeded at 16; `maxFor`, `lowerCeiling`, the ladder) and
+  never touches the element. `VideoEngine` writes, reads `playbackRate` back, treats a
+  mismatch like `NotSupportedError` (the browser silently capped it), lowers the ceiling and
+  retries until a write sticks. §3.2 step 4 and Phase 2 item 1 updated.
+- **D6 — Stats move into Phase 2 (item 8).** No phase owned §3.7. Decision: `core/StatsMeter.ts`
+  measures while `BOOSTING` (pod index increments count as new ads); `Controller` sends
+  batches every 10 s and on segment end; `shared/stats.ts` aggregates into daily
+  `storage.local` buckets, prunes buckets older than 30 days and answers a `getStats` message.
+  Unit tests cover the arithmetic, batching and pruning.
+- **§4.2 Firefox `world: "MAIN"` row** now states `strict_min_version` 140 (Android 142), as
+  shipped in Phase 1.

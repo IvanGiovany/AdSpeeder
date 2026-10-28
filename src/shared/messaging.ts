@@ -1,6 +1,6 @@
 import { browser, type Browser } from './browser';
 import type { PlatformId } from './settings';
-import type { StatsBatch } from './stats';
+import type { StatsBatch, StatsSummary } from './stats';
 
 export type TabPhase = 'watching' | 'boosting' | 'contested' | 'inactive';
 
@@ -19,11 +19,13 @@ export interface MessageMap {
   'tab-status': { payload: { status: TabStatus }; response: undefined };
   /** content → background: add a stats batch (§3.7). */
   'stats-batch': { payload: { batch: StatsBatch }; response: undefined };
+  /** popup/options → background: today's and all-time stats (D6). */
+  'get-stats': { payload: object; response: StatsSummary };
 }
 
 export type MessageType = keyof MessageMap;
 
-export const MESSAGE_TYPES: readonly MessageType[] = ['tab-status', 'stats-batch'];
+export const MESSAGE_TYPES: readonly MessageType[] = ['tab-status', 'stats-batch', 'get-stats'];
 
 export type Message<T extends MessageType = MessageType> = {
   [K in T]: { type: K } & MessageMap[K]['payload'];
@@ -62,9 +64,6 @@ export async function sendMessage<T extends MessageType>(
   message: Message<T>,
 ): Promise<MessageResponse<T>> {
   const reply: unknown = await browser.runtime.sendMessage(message);
-  // Every response is `undefined` until a message returns data (Phase 5), which this rule
-  // reads as void.
-  // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression
   return unwrap(message.type, reply);
 }
 
@@ -73,9 +72,6 @@ export async function sendTabMessage<T extends MessageType>(
   message: Message<T>,
 ): Promise<MessageResponse<T>> {
   const reply: unknown = await browser.tabs.sendMessage(tabId, message);
-  // Every response is `undefined` until a message returns data (Phase 5), which this rule
-  // reads as void.
-  // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression
   return unwrap(message.type, reply);
 }
 

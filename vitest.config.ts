@@ -8,5 +8,12 @@ export default defineConfig({
     environment: 'happy-dom',
     include: ['tests/unit/**/*.test.ts'],
     restoreMocks: true,
+    coverage: {
+      provider: 'v8',
+      include: ['src/core/**', 'src/shared/**'],
+      reporter: ['text', 'json-summary'],
+      // Phase 2 "Done when": core coverage ≥ 90% lines.
+      thresholds: { 'src/core/**': { lines: 90 } },
+    },
   },
 });
