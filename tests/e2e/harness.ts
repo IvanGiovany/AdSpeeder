@@ -17,6 +17,8 @@ const FIXTURES = resolve(ROOT, 'tests/fixtures');
 const SCENARIOS: Record<string, string> = {
   'ad-pod': 'youtube-ad-pod.html',
   ssai: 'youtube-ssai.html',
+  'ssai-preroll': 'youtube-ssai-preroll.html',
+  'ssai-preroll-nobridge': 'youtube-ssai-preroll-nobridge.html',
   live: 'youtube-live.html',
 };
 

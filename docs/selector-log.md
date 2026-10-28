@@ -33,6 +33,18 @@ Record one row per browser. `—` = that chain never matched on the pages visite
 Also note: did the boost start promptly, did the pod keep one boost, was your speed and mute
 state restored, and did the badge text parse into "Ad N of M"?
 
+### Manual run
+
+One row per scenario per browser (D24). **Scenario** is one of: pre-roll, pod, mid-roll,
+skippable, live, navigate mid-ad. **Boost started**: the rate went up (live: muted only) when the
+ad appeared. **Restore clean**: your own speed and mute state came back, with no content played
+fast. **Chain indices**: from the `selector health` log line, e.g. `playerRoot 0, adBadgeText 1`.
+**Events**: any `rate-contested`, `detection-lost` or `selector-drift` log lines, or "none".
+
+| Date | Browser | Scenario | Boost started (y/n) | Restore clean (y/n) | Chain indices | Events (contested / detection-lost / drift) | Notes |
+| ---- | ------- | -------- | ------------------- | ------------------- | ------------- | ------------------------------------------- | ----- |
+|      |         |          |                     |                     |               |                                             |       |
+
 ## 2. Real playbackRate limits (`tests/fixtures/rate-probe.html`)
 
 Open `tests/fixtures/rate-probe.html` straight from disk in each browser, click **Run probe**

@@ -1,0 +1,21 @@
+<!doctype html>
+<!--
+  The same stitched pre-roll without the player API, so the bridge has no video id to report
+  and the normal 300 ms exit after ad-showing clears applies. Local only: served under
+  https://www.youtube.com/watch?v=ssai-preroll-nobridge; every real request is blocked.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: ssai-preroll-nobridge</title>
+  </head>
+  <body data-scenario="ssai-preroll">
+    <div id="movie_player" class="html5-video-player">
+      <div class="html5-video-container">
+        <video class="html5-main-video" loop playsinline></video>
+      </div>
+      <div class="video-ads ytp-ad-module"></div>
+    </div>
+    <script src="/__fixtures/driver.js"></script>
+  </body>
+</html>

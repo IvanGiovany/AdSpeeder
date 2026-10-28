@@ -1,0 +1,21 @@
+<!doctype html>
+<!--
+  Stitched pre-roll with the player API present: the bridge reports the URL's own video id
+  during the ad, so it is treated as SSAI (100 ms exit at countdown 0). Local only: served
+  under https://www.youtube.com/watch?v=ssai-preroll; every real request is blocked.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Fixture: ssai-preroll</title>
+  </head>
+  <body data-scenario="ssai-preroll" data-player-api>
+    <div id="movie_player" class="html5-video-player">
+      <div class="html5-video-container">
+        <video class="html5-main-video" loop playsinline></video>
+      </div>
+      <div class="video-ads ytp-ad-module"></div>
+    </div>
+    <script src="/__fixtures/driver.js"></script>
+  </body>
+</html>

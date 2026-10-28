@@ -123,8 +123,8 @@ export class YouTubeAdapter extends BaseAdapter {
   private contentSrc: string | null = null;
   private contentDuration: number | null = null;
   private facts: Facts | null = null;
-  /** What this ad segment has shown so far, for the SSAI exit rule. */
-  private segment: { y1Seen: boolean; overlaySeen: boolean } | null = null;
+  /** What this ad segment has shown so far, for the SSAI rules. */
+  private segment: { y1Seen: boolean; overlaySeen: boolean; bridgeAnswered: boolean } | null = null;
 
   isWatchContext(url: URL): boolean {
     return isYouTubeWatchUrl(url);
@@ -299,9 +299,11 @@ export class YouTubeAdapter extends BaseAdapter {
   }
 
   /**
-   * §2.3 SSAI rule. ssaiSuspected = Y1 or Y3 active, but no src change against the known
-   * content src and no video-id mismatch. While suspected, exit at the earliest of: Y1 cleared,
-   * the overlay removed, or the countdown reaching 0, by reporting confidence 0.
+   * §2.3 SSAI rule. ssaiSuspected = Y1 or Y3 active, no src change against the known content
+   * src and no video-id mismatch. Before the content src is known (a pre-roll), it also needs
+   * the bridge to have answered during this segment with the URL's own video id: the ad is
+   * inside the content stream (D22). While suspected, exit at the earliest of: Y1 cleared, the
+   * overlay removed, or the countdown reaching 0, by reporting confidence 0.
    */
   protected override decorate(snapshot: AdStateSnapshot): AdStateSnapshot {
     const f = this.facts;
@@ -309,11 +311,16 @@ export class YouTubeAdapter extends BaseAdapter {
       this.segment = null;
       return snapshot;
     }
-    const segment = (this.segment ??= { y1Seen: false, overlaySeen: false });
+    const segment = (this.segment ??= {
+      y1Seen: false,
+      overlaySeen: false,
+      bridgeAnswered: false,
+    });
     segment.y1Seen ||= f.y1;
     segment.overlaySeen ||= f.overlay;
-    const ssaiSuspected =
-      (f.y1 || f.y3) && this.contentSrc !== null && !f.srcChanged && !f.idMismatch;
+    const stitched =
+      this.contentSrc !== null || (segment.bridgeAnswered && this.bridgeIdMatchesUrl());
+    const ssaiSuspected = (f.y1 || f.y3) && stitched && !f.srcChanged && !f.idMismatch;
     if (!ssaiSuspected) return { ...snapshot, ssaiSuspected: false };
     const exit =
       (segment.y1Seen && !f.y1) || (segment.overlaySeen && !f.overlay) || f.countdown === 0;
@@ -448,6 +455,11 @@ export class YouTubeAdapter extends BaseAdapter {
     return Boolean(videoId && urlId && videoId !== urlId);
   }
 
+  private bridgeIdMatchesUrl(): boolean {
+    const videoId = this.bridge?.videoId;
+    return Boolean(videoId && videoId === new URL(location.href).searchParams.get('v'));
+  }
+
   private sendProbe(): void {
     const probe: BridgeProbe = { ns: BRIDGE_NS, type: 'probe', nonce: this.nonce };
     window.postMessage(probe, location.origin);
@@ -456,8 +468,12 @@ export class YouTubeAdapter extends BaseAdapter {
   private onBridgeMessage(event: MessageEvent): void {
     if (!isValidBridgeMessage(event, this.nonce)) return;
     const { videoId, adHint, live } = event.data;
+    // An answer counts for this segment only if it arrived during it, not from before the ad.
+    const firstInSegment = this.segment !== null && !this.segment.bridgeAnswered;
+    if (this.segment) this.segment.bridgeAnswered = true;
     const b = this.bridge;
-    if (b?.videoId === videoId && b.adHint === adHint && b.live === live) return;
+    const same = b?.videoId === videoId && b.adHint === adHint && b.live === live;
+    if (same && !firstInSegment) return;
     this.bridge = { videoId, adHint, live };
     this.invalidate();
   }

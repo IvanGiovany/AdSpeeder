@@ -125,6 +125,8 @@ adspeeder/
 │   ├── fixtures/                 # static HTML mimicking player DOM states
 │   │   ├── youtube-ad-pod.html
 │   │   ├── youtube-ssai.html
+│   │   ├── youtube-ssai-preroll.html          # stitched pre-roll, bridge reports the URL id (D22)
+│   │   ├── youtube-ssai-preroll-nobridge.html # same, no player API for the bridge to read
 │   │   └── netflix-ad-break.html
 │   └── e2e/                      # Playwright, extension loaded
 └── safari/                       # generated Xcode project (git-ignored except config)
@@ -303,15 +305,30 @@ locale-agnostic regex `/(\d+)\D+(\d+)/` over the badge's `textContent`, acceptin
 `world: 'MAIN'` where supported, otherwise injected as a `<script src>` from
 `web_accessible_resources`. It polls nothing; it listens for
 `{ ns: 'adspeeder', type: 'probe', nonce }` messages and replies with
-`{ ns, type: 'probe-result', nonce, videoId, adHint }`. The isolated script validates
-`event.source === window`, the namespace, and a per-session nonce, and ignores everything
-else. All player-API calls use optional chaining inside `try/catch`, because these methods are
-undocumented and change.
+`{ ns, type: 'probe-result', nonce, videoId, adHint, live }`, where `videoId: string | null`,
+`adHint: boolean | null` and `live: boolean | null` (D20). The isolated script validates
+`event.source === window`, the namespace, a per-session nonce and the field types, and ignores
+everything else. All player-API calls use optional chaining inside `try/catch`, because these
+methods are undocumented and change. `null` always means "unknown", never a negative signal.
+
+Undocumented player-API dependencies (D21), each read only by the bridge:
+
+- `getVideoData().video_id` → `videoId` (Y4 id comparison, D22).
+- `getVideoData().isLive` → `live` (context exclusions below).
+- `getAdState()` → `adHint`: `1` means an ad is playing (`true`); `-1` and `0` mean no ad
+  (`false`); anything else, including a missing method or a throw, is `null`.
 
 **Server-side ad injection (SSAI) experiments.** When YouTube stitches the ad into the content
 stream, there is no src swap and Y4's id comparison may not change. Detection then rests on
-Y1–Y3. Two extra rules apply when `ssaiSuspected` (Y1 or Y3 active but no src change and no id
-mismatch):
+Y1–Y3. `ssaiSuspected` is set when Y1 or Y3 is active, there is no src change and no id
+mismatch, and either:
+
+- the content src is already known (learned after more than 1 s of ad-free playback), or
+- it is not yet known (a pre-roll) but the bridge, answering during this ad segment, reports a
+  `videoId` equal to the URL's `v` parameter: the ad is inside the content stream (D22).
+
+With no bridge answer, a pre-roll whose content src is unknown is never treated as SSAI.
+Two extra rules apply while `ssaiSuspected`:
 
 - Exit uses the earliest of: Y1 cleared, Y3 overlay removed, or the ad countdown reaching 0.
   Exiting late on a stitched stream fast-forwards real content.
@@ -621,9 +638,11 @@ script is declared statically and exits on its first line unless the user has en
 | Max `playbackRate`    | Probe (expect 16)                       | Probe; audio is muted anyway                                                                                               | Probe                                                                  |
 | Packaging             | .zip to Chrome Web Store / Edge Add-ons | .zip + source archive to AMO                                                                                               | `xcrun safari-web-extension-converter` → Xcode app → App Store Connect |
 
-The bridge loader in `youtube.content.ts` checks for a `data-adspeeder-bridge` attribute the
-MAIN-world script sets on `document.documentElement`; if absent after 1 s, it injects
-`youtube-bridge.js` via `<script src="${browser.runtime.getURL('youtube-bridge.js')}">`.
+The bridge fallback loader lives in `YouTubeAdapter` (D23), so `youtube.content.ts` stays a
+one-line bootstrap. It checks for a `data-adspeeder-bridge` attribute the MAIN-world script
+sets on `document.documentElement`; if absent after 1 s, it injects `youtube-bridge.js` via
+`<script src="${browser.runtime.getURL('youtube-bridge.js')}">`, registered with the adapter's
+`AbortSignal`.
 
 ### 4.3 Build commands
 
@@ -759,8 +778,10 @@ Read docs/BUILD_PLAN.md section 2.1-2.3. Implement:
    nonce validation; fallback <script src> injection after 1 s.
 5. youtube.content.ts bootstrap.
 6. Fixtures: tests/fixtures/youtube-ad-pod.html (pre-roll pod of 2 with class
-   flicker), youtube-ssai.html (no src swap), youtube-live.html. A tiny fixture
-   driver script toggles classes and badge text on a timeline.
+   flicker), youtube-ssai.html (no src swap), youtube-live.html, and the stitched
+   pre-roll pair youtube-ssai-preroll.html / youtube-ssai-preroll-nobridge.html
+   (100 ms exit with the bridge, 300 ms without; D22). A tiny fixture driver script
+   toggles classes and badge text on a timeline.
 7. Unit tests on the adapter against fixtures; Playwright e2e that loads the
    Chromium build, serves fixtures under a youtube.com host mapping, and asserts
    rate/mute transitions and final restore.
@@ -957,3 +978,17 @@ Places where the plan was ambiguous or self-contradictory, resolved with the own
   300 s muted-only cap. (§3.1)
 - **D19 — Cap check survives timer throttling.** Elapsed time is clock-based; besides the timer,
   the cap is checked on every `timeupdate` during a segment and on `visibilitychange`. (§3.1)
+- **D20 — Bridge reports live.** `probe-result` carries `live: boolean | null`, read from
+  `getVideoData().isLive`; `true` turns off the rate boost like `ytp-live`. (§2.3)
+- **D21 — `getAdState()` is an undocumented dependency.** `1` means ad; `-1`/`0` mean no ad;
+  anything else is unknown (`null`). Listed with the other player-API reads in §2.3.
+- **D22 — Stitched pre-roll via the bridge.** SSAI is suspected from a known content src, or,
+  before it is known, when Y1 or Y3 is active and the bridge (answering during the segment)
+  reports the URL's own `v` as the video id. With no bridge, a pre-roll is not SSAI. Fixture
+  pair: 100 ms exit at countdown 0 with the bridge, 300 ms after `ad-showing` clears without.
+  (§2.3, §3.4)
+- **D23 — Bridge fallback loader in `YouTubeAdapter`**, not `youtube.content.ts`, so the
+  entrypoint stays a bootstrap and the loader shares the adapter's `AbortSignal`. (§4.2)
+- **D24 — Manual-run log.** `docs/selector-log.md` has a "Manual run" table: date, browser,
+  scenario (pre-roll / pod / mid-roll / skippable / live / navigate mid-ad), boost started,
+  restore clean, chain indices, events (contested / detection-lost / drift), notes. (Appendix)

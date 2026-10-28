@@ -16,7 +16,7 @@ export interface BridgeProbeResult {
   nonce: string;
   videoId: string | null;
   adHint: boolean | null;
-  /** Whether the player reports a live stream; null when unknown (§2.3 live exclusion). */
+  /** Whether the player reports a live stream; null when unknown (§2.3 live exclusion, D20). */
   live: boolean | null;
 }
 

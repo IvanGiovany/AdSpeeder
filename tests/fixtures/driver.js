@@ -1,7 +1,9 @@
 // Fixture driver: plays a scenario (classes, ad UI, badge text, media src) on a timeline.
 // Plain JS so it runs unchanged in real browsers (e2e, manual) and under happy-dom (unit tests).
 // The page under test picks its scenario with <body data-scenario="…">. Add ?autoplay=1 to
-// the URL to start it on load; otherwise call `AdFixture.run()`.
+// the URL to start it on load; otherwise call `AdFixture.run()`. <body data-player-api> also
+// gives the player root a minimal getVideoData() that reports the URL's ?v= as the video id,
+// so the extension's MAIN-world bridge has something to read.
 //
 // It also records what the extension does to the <video> (rate, mute, crash marker), with
 // timestamps, in `AdFixture.log`.
@@ -116,6 +118,18 @@
       [600, 'adEnd'],
       [800, 'done'],
     ],
+    // Stitched pre-roll: no src swap and the content src is never learned (the ad starts
+    // before 1 s of content). Only the bridge's video id can tell it is in the content stream.
+    'ssai-preroll': [
+      [0, 'src', 'content'],
+      [0, 'userRate', 1.25],
+      [0, 'play'],
+      [300, 'adStart', { index: 1, total: 1, countdown: '0:02' }],
+      [500, 'countdown', '0:01'],
+      [500, 'countdown', '0:00'],
+      [600, 'adEnd'],
+      [800, 'done'],
+    ],
     // Mid-roll on a live stream: mute only, never a rate boost.
     live: [
       [0, 'src', 'content'],
@@ -133,6 +147,11 @@
     new global.MutationObserver(() =>
       note('marker', v.hasAttribute('data-adspeeder-boosted')),
     ).observe(v, { attributes: true, attributeFilter: ['data-adspeeder-boosted'] });
+  }
+
+  function installPlayerApi() {
+    const id = new global.URLSearchParams(global.location.search).get('v');
+    root().getVideoData = () => ({ video_id: id, isLive: false });
   }
 
   const scenarioName = doc.body.dataset.scenario;
@@ -159,5 +178,6 @@
   };
 
   record();
+  if (doc.body.hasAttribute('data-player-api')) installPlayerApi();
   if (/[?&]autoplay=1\b/.test(global.location.search)) void global.AdFixture.run();
 })(window);

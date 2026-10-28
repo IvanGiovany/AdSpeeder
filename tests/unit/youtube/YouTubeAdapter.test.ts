@@ -351,6 +351,66 @@ describe('MAIN-world bridge (Y4)', () => {
     expect(s.adapter.getCapabilities().allowRateBoost).toBe(false);
   });
 
+  describe('stitched pre-roll (D22): content src not yet known', () => {
+    const answer = (nonce: string, videoId: string | null) => {
+      reply({ ns: BRIDGE_NS, type: 'probe-result', nonce, videoId, adHint: null, live: null });
+    };
+
+    async function startPreRoll(): Promise<{
+      s: Started;
+      fixture: FixtureApi;
+      nonce: () => string;
+    }> {
+      const fixture = loadFixture('youtube-ssai-preroll');
+      const { nonce } = captureNonce();
+      const s = await start();
+      await runSteps(fixture, (action) => action === 'countdown');
+      await settle();
+      return { s, fixture, nonce };
+    }
+
+    it('suspects SSAI once the bridge reports the URL’s own video id during the ad', async () => {
+      const { s, fixture, nonce } = await startPreRoll();
+      expect(s.last()).toMatchObject({ confidence: 0.9, ssaiSuspected: false });
+      answer(nonce(), 'abc');
+      await settle();
+      expect(s.last()).toMatchObject({ confidence: 0.9, ssaiSuspected: true });
+
+      fixture.actions.countdown?.('0:00');
+      await settle();
+      expect(s.last()).toMatchObject({ confidence: 0, reasons: ['yt.ssai.exit'] });
+    });
+
+    it('keeps the normal rule without a bridge answer', async () => {
+      const { s, fixture } = await startPreRoll();
+      fixture.actions.countdown?.('0:00');
+      await settle();
+      expect(s.last()).toMatchObject({ active: true, confidence: 0.9, ssaiSuspected: false });
+    });
+
+    it('does not suspect SSAI when the bridge reports a different id (Y4 instead)', async () => {
+      const { s, nonce } = await startPreRoll();
+      answer(nonce(), 'ad-video');
+      await settle();
+      expect(s.last()).toMatchObject({ confidence: 1, ssaiSuspected: false });
+    });
+
+    it('ignores an answer from before the ad started', async () => {
+      const fixture = loadFixture('youtube-ssai-preroll');
+      const { nonce } = captureNonce();
+      const s = await start();
+      document.querySelector('#movie_player')?.classList.add('x'); // probe before the ad
+      await settle();
+      answer(nonce(), 'abc');
+      await runSteps(fixture, (action) => action === 'countdown');
+      await settle();
+      expect(s.last()).toMatchObject({ confidence: 0.9, ssaiSuspected: false });
+      answer(nonce(), 'abc'); // same values, but the first answer inside this segment
+      await settle();
+      expect(s.last()).toMatchObject({ ssaiSuspected: true });
+    });
+  });
+
   it('injects the bridge via <script src> after 1 s only if it never announced itself', async () => {
     vi.useFakeTimers();
     loadFixture('youtube-ad-pod');

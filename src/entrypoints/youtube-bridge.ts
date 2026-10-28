@@ -7,7 +7,7 @@ import {
 } from '../platforms/youtube/bridgeProtocol';
 import { SELECTORS } from '../platforms/youtube/selectors';
 
-/** The undocumented parts of YouTube's player element this probe reads (all optional). */
+/** The undocumented parts of YouTube's player element this probe reads (all optional; §2.3, D21). */
 interface PlayerApi {
   getVideoData?: () => { video_id?: unknown; isLive?: unknown } | undefined;
   getAdState?: () => unknown;

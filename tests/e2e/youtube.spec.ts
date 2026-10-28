@@ -3,6 +3,9 @@ import { at, expect, openScenario, runScenario, test, type LogEntry } from './ha
 /** §5 Phase 3 "Done when" budgets. */
 const BOOST_WITHIN_MS = 250;
 const RESTORE_WITHIN_MS = 400;
+/** §3.4 exit debounces: default and SSAI. */
+const EXIT_DEBOUNCE_MS = 300;
+const SSAI_EXIT_DEBOUNCE_MS = 100;
 
 const rates = (log: LogEntry[]) =>
   log.filter((e) => e.what === 'rate').map((e) => e.value as number);
@@ -66,6 +69,38 @@ test.describe('YouTube fixtures (Chromium build, local only)', () => {
       BOOST_WITHIN_MS,
     );
     expect(restored).toBeLessThan(at(log, 'ad-end'));
+    expect(markers(log)).toEqual([true, false]);
+  });
+
+  test('stitched pre-roll with the bridge: 100 ms SSAI exit after the countdown reaches 0', async ({
+    context,
+  }) => {
+    const page = await openScenario(context, 'ssai-preroll');
+    const log = await runScenario(page);
+
+    const zero = at(log, 'countdown', '0:00');
+    const restored = at(log, 'rate', 1.25, zero);
+    expect(
+      measured('stitched pre-roll restore after 0:00', restored - zero),
+    ).toBeGreaterThanOrEqual(SSAI_EXIT_DEBOUNCE_MS);
+    expect(restored - zero).toBeLessThan(EXIT_DEBOUNCE_MS);
+    expect(restored).toBeLessThan(at(log, 'ad-end'));
+    expect(markers(log)).toEqual([true, false]);
+  });
+
+  test('stitched pre-roll without the bridge: normal 300 ms exit after ad-showing clears', async ({
+    context,
+  }) => {
+    const page = await openScenario(context, 'ssai-preroll-nobridge');
+    const log = await runScenario(page);
+
+    const adEnd = at(log, 'ad-end');
+    const restored = at(log, 'rate', 1.25, at(log, 'countdown', '0:00'));
+    expect(restored).toBeGreaterThan(adEnd); // countdown 0 alone did not end it
+    expect(
+      measured('no-bridge pre-roll restore after ad-end', restored - adEnd),
+    ).toBeGreaterThanOrEqual(EXIT_DEBOUNCE_MS);
+    expect(restored - adEnd).toBeLessThanOrEqual(RESTORE_WITHIN_MS);
     expect(markers(log)).toEqual([true, false]);
   });
 
