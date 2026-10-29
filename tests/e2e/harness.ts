@@ -13,7 +13,7 @@ const ROOT = fileURLToPath(new URL('../..', import.meta.url));
 const EXTENSION = resolve(ROOT, '.output/chrome-mv3');
 const FIXTURES = resolve(ROOT, 'tests/fixtures');
 
-/** `?v=<scenario>` → fixture file, served as https://www.youtube.com/watch?v=<scenario>. */
+/** `?v=<scenario>` â†’ fixture file, served as https://www.youtube.com/watch?v=<scenario>. */
 const SCENARIOS: Record<string, string> = {
   'ad-pod': 'youtube-ad-pod.html',
   ssai: 'youtube-ssai.html',
@@ -45,12 +45,14 @@ export interface LogEntry {
  */
 function serve(route: Route, blocked: string[]): Promise<void> {
   const url = new URL(route.request().url());
-  if (url.hostname !== 'www.youtube.com') {
+  if (!['www.youtube.com', 'www.netflix.com'].includes(url.hostname)) {
     blocked.push(url.href);
     return route.abort('blockedbyclient');
   }
   let file: string | null = null;
-  if (url.pathname === '/watch') {
+  if (url.hostname === 'www.netflix.com' && url.pathname.startsWith('/watch/')) {
+    file = resolve(FIXTURES, 'netflix-ad-break.html');
+  } else if (url.pathname === '/watch') {
     const name = SCENARIOS[url.searchParams.get('v') ?? ''];
     if (name) file = resolve(FIXTURES, name);
   } else if (url.pathname.startsWith('/__fixtures/')) {
@@ -116,7 +118,7 @@ export function runScenario(page: Page): Promise<LogEntry[]> {
 /**
  * Media seconds played between the entries at times `from` and `to`, from the logged
  * currentTime. A `src` entry restarts the count at 0 (new source); any other backwards step
- * is the looping clip wrapping around, counted as (duration − last) + current.
+ * is the looping clip wrapping around, counted as (duration âˆ’ last) + current.
  */
 export function mediaAdvanced(log: LogEntry[], from: number, to: number): number {
   let total = 0;

@@ -1,9 +1,13 @@
 <!doctype html>
-<!-- Placeholder: Netflix ad break, built from the Phase 4 DOM capture. Local only; tests never load the real site. -->
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <title>netflix-ad-break</title>
-  </head>
-  <body></body>
+  <meta charset="utf-8" /><title>Provisional Netflix fixture</title>
+  <body>
+    <main class="watch-video">
+      <video src="/__fixtures/media/clip.mp4" loop></video>
+      <div data-uia="ad-break" hidden>Advertisement <span data-uia="ad-countdown">0:10</span></div>
+      <button data-uia="player-skip-intro" hidden>Skip intro</button>
+      <button data-uia="player-skip-recap" hidden>Skip recap</button>
+      <button data-uia="next-episode-seamless-button" hidden>Next episode</button>
+    </main>
+  </body>
 </html>

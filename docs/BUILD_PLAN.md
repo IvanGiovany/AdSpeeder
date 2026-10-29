@@ -346,6 +346,9 @@ URL.
 
 ### 2.4 Netflix adapter
 
+Run override (D26): implement provisional selectors/fixture before capture; capture remains
+required before trusting real-site behavior. Netflix remains disabled and Experimental.
+
 Netflix ad-tier markup must be confirmed against a live ad-tier account before any selector is
 trusted, so Phase 4 begins with a recorded DOM-discovery task. The adapter structure is fixed
 now; the selectors are filled in from that capture.
@@ -1030,3 +1033,10 @@ Places where the plan was ambiguous or self-contradictory, resolved with the own
   and the full restore must be ≤ debounce × 1.0 + 50 ms. The SSAI check adds a named Chromium
   allowance of 1.0 s of media: after a rate drop from 16x, Chromium's clock stalls about 30 ms
   and then jumps 0.55–0.83 s while queued 16x audio drains, which the extension can't prevent.
+
+- **D26 — PROVISIONAL — confirm with user.** (§2.4, §5 Phase 4) Per this run's override,
+  selectors and fixture are guesses, versioned `2026-10-30-provisional`. Overlay 0.6,
+  countdown 0.3; each promo marker 0.6. Ads take precedence over promo markers and unrelated
+  kinds do not combine confidence. Rejected waiting for capture (explicitly overridden) and
+  treating countdown alone as a confirmed ad. Root discovery polls at 250 ms with a narrow
+  player observer; rejected permanent document/body subtree observation.
