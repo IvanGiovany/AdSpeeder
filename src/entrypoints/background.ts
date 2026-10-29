@@ -3,7 +3,7 @@ import { browser } from '../shared/browser';
 import { createLogger } from '../shared/logger';
 import { onMessage, type TabStatus } from '../shared/messaging';
 import { defaultSettings, migrateStoredSettings, STORAGE_KEY } from '../shared/settings';
-import { getStatsSummary, recordStatsBatch } from '../shared/stats';
+import { getStatsSummary, recordStatsBatch, resetStats } from '../shared/stats';
 
 const BADGE_COLOR = '#d32f2f';
 
@@ -40,6 +40,10 @@ export default defineBackground({
       },
       'stats-batch': async ({ batch }) => {
         await recordStatsBatch(batch);
+      },
+      'reset-stats': async () => {
+        await resetStats();
+        return undefined;
       },
       'get-stats': () => getStatsSummary(),
     });

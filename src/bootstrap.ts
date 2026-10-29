@@ -1,3 +1,4 @@
+import { onMessage, sendMessage, type TabStatus, type DebugEvent } from './shared/messaging';
 import { Controller } from './core/Controller';
 import { def } from './platforms/registry';
 import { createLogger } from './shared/logger';
@@ -14,12 +15,31 @@ import { getSettings, subscribeSettings, type PlatformId } from './shared/settin
 export async function bootstrap(id: PlatformId, ctx: { signal: AbortSignal }): Promise<void> {
   let settings = await getSettings();
   if (ctx.signal.aborted) return;
-  const log = createLogger(id, { isDebug: () => settings.debug });
+  let status: TabStatus | null = null;
+  const events: DebugEvent[] = [];
+  const log = createLogger(id, {
+    isDebug: () => settings.debug,
+    onEvent: (level, args) => {
+      if (!settings.debug) return;
+      events.push({
+        at: Date.now(),
+        scope: id,
+        level,
+        message: args.map((a) => (typeof a === 'string' ? a : JSON.stringify(a))).join(' '),
+      });
+      if (events.length > 50) events.shift();
+    },
+  });
+  onMessage({ 'get-status': () => status, 'get-debug': () => [...events] }, { signal: ctx.signal });
   const controller = new Controller({
     adapter: def(id).create(),
     settings,
     log,
     signal: ctx.signal,
+    reportStatus: (next) => {
+      status = next;
+      void sendMessage({ type: 'tab-status', status: next }).catch(() => undefined);
+    },
   });
   subscribeSettings(
     (next) => {

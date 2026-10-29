@@ -24,6 +24,7 @@ export interface Settings {
   platforms: Record<PlatformId, boolean>;
   promoActions: Record<PromoKind, PromoAction>;
   debug: boolean;
+  thresholds?: { enterThreshold: number; exitThreshold: number; exitDebounceMs: number };
 }
 
 export interface SettingsPatch {
@@ -33,6 +34,7 @@ export interface SettingsPatch {
   platforms?: Partial<Record<PlatformId, boolean>>;
   promoActions?: Partial<Record<PromoKind, PromoAction>>;
   debug?: boolean;
+  thresholds?: Settings['thresholds'];
 }
 
 export function defaultSettings(): Settings {
@@ -95,6 +97,7 @@ function sanitize(raw: RawSettings): Settings {
     },
     promoActions: { intro: promo('intro'), recap: promo('recap'), promo: promo('promo') },
     debug: bool(raw.debug, d.debug),
+    ...(validThresholds(raw.thresholds) ? { thresholds: raw.thresholds } : {}),
   };
 }
 
@@ -181,4 +184,23 @@ export function subscribeSettings(
   };
   signal?.addEventListener('abort', unsubscribe, { once: true });
   return unsubscribe;
+}
+
+export function validThresholds(value: unknown): value is NonNullable<Settings['thresholds']> {
+  if (!isRecord(value)) return false;
+  const { enterThreshold: enter, exitThreshold: exit, exitDebounceMs: delay } = value;
+  return (
+    typeof enter === 'number' &&
+    Number.isFinite(enter) &&
+    enter > 0 &&
+    enter <= 1 &&
+    typeof exit === 'number' &&
+    Number.isFinite(exit) &&
+    exit >= 0 &&
+    exit < enter &&
+    typeof delay === 'number' &&
+    Number.isFinite(delay) &&
+    delay >= 100 &&
+    delay <= 1000
+  );
 }

@@ -10,6 +10,7 @@ export interface Logger {
 export interface LoggerOptions {
   /** Read on every call, so toggling `settings.debug` takes effect without a reload. */
   isDebug?: () => boolean;
+  onEvent?: (level: LogLevel, args: unknown[]) => void;
   sink?: Pick<Console, LogLevel>;
 }
 
@@ -23,16 +24,21 @@ export function createLogger(scope: string, options: LoggerOptions = {}): Logger
   const gated =
     (level: 'debug' | 'info') =>
     (...args: unknown[]): void => {
-      if (isDebug()) sink[level](prefix, ...args);
+      if (isDebug()) {
+        sink[level](prefix, ...args);
+        options.onEvent?.(level, args);
+      }
     };
   return {
     debug: gated('debug'),
     info: gated('info'),
     warn: (...args) => {
       sink.warn(prefix, ...args);
+      options.onEvent?.('warn', args);
     },
     error: (...args) => {
       sink.error(prefix, ...args);
+      options.onEvent?.('error', args);
     },
   };
 }

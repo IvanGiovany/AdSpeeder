@@ -850,6 +850,9 @@ stall at the chosen `maxRateHint`; the template compiles.
 
 ### Phase 5 — Popup & options UI
 
+D27–D28 clarify live Netflix enablement, debug lifetime and threshold bounds. UI uses the
+owner's requested minimal, spacious Google/Home-inspired style with native controls.
+
 ```text
 Build the UI in vanilla TS + CSS (no framework), light and dark themes via
 prefers-color-scheme.
@@ -1040,3 +1043,15 @@ Places where the plan was ambiguous or self-contradictory, resolved with the own
   kinds do not combine confidence. Rejected waiting for capture (explicitly overridden) and
   treating countdown alone as a confirmed ad. Root discovery polls at 250 ms with a narrow
   player observer; rejected permanent document/body subtree observation.
+
+- **D27 — PROVISIONAL — confirm with user.** (§4.1, §5 Phase 5) Disabled Netflix installs
+  only a settings subscription, starting its adapter once enabled without reload. Rejected
+  the literal permanent early exit, which contradicts live settings. No detection runs before
+  opt-in. Once initialized, Controller handles enable/disable and exact restoration.
+- **D28 — PROVISIONAL — confirm with user.** (§2.1, §5 Phase 5) Debug events are the last 50
+  events in each content instance's memory, collected only while debug is enabled. Options
+  reads the active/recent supported tab and exports locally; rejected persistent browsing
+  logs. Threshold overrides are optional validated settings (0 <= exit < enter <= 1;
+  100–1000 ms exit delay), applied live. Popup shows the cached probe ceiling bounded by
+  platform hint; before probing this is a candidate ceiling, explicitly labelled as checked
+  when an ad starts. Rejected probing during ordinary content because it changes playback.

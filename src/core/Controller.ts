@@ -77,7 +77,7 @@ export class Controller {
   private readonly adapter: PlatformAdapter;
   private readonly log: Logger;
   private readonly lifetime: AbortController;
-  private readonly thresholds: Readonly<Thresholds>;
+  private thresholds: Readonly<Thresholds>;
   private readonly maxBoostedMs: number;
   private readonly maxMutedOnlyMs: number;
   private readonly now: () => number;
@@ -86,6 +86,7 @@ export class Controller {
   private readonly reportStatus: (status: TabStatus) => void;
 
   private readonly engine: VideoEngine;
+  private readonly probe = new RateProbe();
   private readonly guard: RateGuard;
   private readonly meter: StatsMeter;
   private tracker: MediaTracker | null = null;
@@ -113,7 +114,7 @@ export class Controller {
     this.adapter = options.adapter;
     this.settings = options.settings;
     this.log = options.log;
-    this.thresholds = options.thresholds ?? DEFAULT_THRESHOLDS;
+    this.thresholds = options.thresholds ?? options.settings.thresholds ?? DEFAULT_THRESHOLDS;
     this.maxBoostedMs = options.maxBoostedMs ?? MAX_BOOSTED_MS;
     this.maxMutedOnlyMs = options.maxMutedOnlyMs ?? MAX_MUTED_ONLY_MS;
     this.now = options.now ?? (() => performance.now());
@@ -134,7 +135,7 @@ export class Controller {
       { once: true, signal: this.lifetime.signal },
     );
 
-    this.engine = new VideoEngine(new RateProbe(), this.log);
+    this.engine = new VideoEngine(this.probe, this.log);
     this.meter = new StatsMeter(this.now);
     this.guard = new RateGuard(
       {
@@ -238,6 +239,7 @@ export class Controller {
 
   updateSettings(settings: Readonly<Settings>): void {
     this.settings = settings;
+    this.thresholds = settings.thresholds ?? DEFAULT_THRESHOLDS;
     if (!settings.enabled) {
       this.forceRestore('user-disabled');
     } else if (!settings.platforms[this.adapter.id]) {
@@ -248,6 +250,7 @@ export class Controller {
       this.syncCap();
     }
     if (this.latest) this.onSnapshot(this.latest);
+    this.report();
   }
 
   /** Restores, flushes stats and removes every listener and timer. Safe to call twice. */
@@ -669,6 +672,9 @@ export class Controller {
     }
     this.reportStatus({
       platform: this.adapter.id,
+      maxRate: v
+        ? Math.min(this.probe.maxFor(v), this.adapter.getCapabilities().maxRateHint ?? Infinity)
+        : null,
       phase: tabPhase,
       rate: v && isBoostedPhase(phase) ? this.engine.appliedRate(v) : null,
       pod: isBoostedPhase(phase) ? (this.latest?.pod ?? null) : null,

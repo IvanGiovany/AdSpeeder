@@ -5,7 +5,11 @@ first for the rules, then this file, then `docs/BUILD_PLAN.md` for the spec.
 
 ## Where we are
 
-Run update: Phase 4 implemented provisionally under the 2026-10-30 user override.
+Run update: Phase 5 UI implemented; Phase 4 committed as `a195fca` (292 unit, 7 e2e).
+Minimal popup/options include live settings/status, local debug export and access guidance.
+Keyboard/contrast checks and real-browser permission grants need tomorrow’s review.
+
+Phase 4 implemented provisionally under the 2026-10-30 user override.
 Netflix fixture, selectors, adapter, template and adding-platform guide are implemented.
 Real-account stall testing remains manual-only. Baseline: 288 unit tests, 5 e2e tests
 (the historical count of 7 below was inaccurate). Phases 5 and 6 follow without a pause.
@@ -67,7 +71,7 @@ about 99.5%.
 ## Waiting on the user
 
 Current run override: no blocking questions. Capture Netflix DOM using netflix-discovery.md,
-confirm D26, and run real-site/browser checks tomorrow. Historical phase gates below are
+confirm D26–D28, and run real-site/browser checks tomorrow. Historical phase gates below are
 superseded for this run only.
 
 1. **Manual real-YouTube run (the last Phase 3 "Done when" item).** The user is doing this

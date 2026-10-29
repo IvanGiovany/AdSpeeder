@@ -10,11 +10,21 @@ export interface TabStatus {
   phase: TabPhase;
   /** Rate currently applied while boosting, else null. */
   rate: number | null;
+  maxRate?: number | null;
   pod: { index: number; total: number } | null;
 }
 
 /** Every runtime message: its payload (besides `type`) and the handler's response. */
+export interface DebugEvent {
+  at: number;
+  scope: string;
+  level: string;
+  message: string;
+}
 export interface MessageMap {
+  'get-status': { payload: object; response: TabStatus | null };
+  'get-debug': { payload: object; response: DebugEvent[] };
+  'reset-stats': { payload: object; response: undefined };
   /** content → background: update this tab's badge. */
   'tab-status': { payload: { status: TabStatus }; response: undefined };
   /** content → background: add a stats batch (§3.7). */
@@ -25,7 +35,14 @@ export interface MessageMap {
 
 export type MessageType = keyof MessageMap;
 
-export const MESSAGE_TYPES: readonly MessageType[] = ['tab-status', 'stats-batch', 'get-stats'];
+export const MESSAGE_TYPES: readonly MessageType[] = [
+  'tab-status',
+  'stats-batch',
+  'get-stats',
+  'get-status',
+  'get-debug',
+  'reset-stats',
+];
 
 export type Message<T extends MessageType = MessageType> = {
   [K in T]: { type: K } & MessageMap[K]['payload'];

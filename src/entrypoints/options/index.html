@@ -4,13 +4,65 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta name="manifest.open_in_tab" content="true" />
-    <title>AdSpeeder options</title>
+    <title>AdSpeeder settings</title>
     <link rel="stylesheet" href="./options.css" />
   </head>
   <body>
     <main>
-      <h1>AdSpeeder options</h1>
-      <p>Options arrive in Phase 5.</p>
+      <h1>Make yourself at home.</h1>
+      <p>AdSpeeder settings · saved automatically</p>
+      <h2>Where it works</h2>
+      <div id="platforms"></div>
+      <p>
+        <span class="tag">Experimental</span> Netflix selectors are unverified. Playback may stall;
+        disabled by default.
+      </p>
+      <h2>Beyond ads</h2>
+      <p>Choose whether to speed through intros, recaps and previews.</p>
+      <div id="promos"></div>
+      <details>
+        <summary>Advanced &amp; diagnostics</summary>
+        <div id="debug"></div>
+        <form id="thresholds">
+          <label class="control"
+            >Enter confidence<input
+              name="enter"
+              type="number"
+              min="0.01"
+              max="1"
+              step="0.01"
+              required /></label
+          ><label class="control"
+            >Exit confidence<input
+              name="exit"
+              type="number"
+              min="0"
+              max="0.99"
+              step="0.01"
+              required /></label
+          ><label class="control"
+            >Exit delay (ms)<input
+              name="delay"
+              type="number"
+              min="100"
+              max="1000"
+              step="1"
+              required /></label
+          ><button>Save thresholds</button>
+          <p id="threshold-status" role="status"></p>
+        </form>
+        <p>
+          Last 50 debug events from a supported tab. Enable debug logging first. Events stay in
+          memory until the page closes.
+        </p>
+        <button id="refresh">Refresh events</button><button id="export">Export JSON</button>
+        <pre id="events"></pre>
+      </details>
+      <h2>Start fresh</h2>
+      <button id="reset-stats">Reset statistics</button
+      ><button id="reset-settings">Reset all settings</button>
+      <p id="saved" role="status"></p>
+      <p id="error" role="alert"></p>
     </main>
     <script type="module" src="./main.ts"></script>
   </body>

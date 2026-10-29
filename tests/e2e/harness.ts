@@ -45,6 +45,8 @@ export interface LogEntry {
  */
 function serve(route: Route, blocked: string[]): Promise<void> {
   const url = new URL(route.request().url());
+  // Packaged extension modules are local resources, not site network access.
+  if (url.protocol === 'chrome-extension:') return route.continue();
   if (!['www.youtube.com', 'www.netflix.com'].includes(url.hostname)) {
     blocked.push(url.href);
     return route.abort('blockedbyclient');

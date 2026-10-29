@@ -9,7 +9,13 @@
   <body>
     <main>
       <h1>AdSpeeder</h1>
-      <p id="summary">Loading settings…</p>
+      <p id="status" role="status">Checking this page…</p>
+      <button id="grant" hidden>Grant access</button>
+      <div id="controls"></div>
+      <p id="limit"></p>
+      <section class="card"><div id="stats" class="stats"></div></section>
+      <a href="options.html" target="_blank">Settings</a>
+      <p id="error" role="alert"></p>
     </main>
     <script type="module" src="./main.ts"></script>
   </body>
