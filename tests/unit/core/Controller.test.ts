@@ -1030,3 +1030,36 @@ describe('two-stage exit (D25)', () => {
     expect(next.muted).toBe(false);
   });
 });
+
+describe('Phase 6 hardening', () => {
+  it('applies live threshold overrides and reports a changed requested speed immediately', async () => {
+    const h = await setup();
+    h.controller.updateSettings(
+      applyPatch(defaultSettings(), {
+        thresholds: { enterThreshold: 0.8, exitThreshold: 0.2, exitDebounceMs: 300 },
+      }),
+    );
+    h.adapter.emit(confidenceSnapshot(0.7));
+    expect(phase(h)).toBe('IDLE');
+    h.adapter.emit(confidenceSnapshot(0.9));
+    expect(phase(h)).toBe('BOOSTING');
+    h.controller.updateSettings(applyPatch(defaultSettings(), { speed: 2 }));
+    expect(h.statuses.at(-1)?.rate).toBe(2);
+  });
+  it('requested speed above a rejecting browser ceiling is probed and reported', async () => {
+    const h = await setup({ video: { maxRate: 4 }, settings: { speed: 16 } });
+    h.adapter.emit(adSnapshot());
+    expect(h.video.playbackRate).toBe(4);
+    expect(h.statuses.at(-1)?.maxRate).toBe(4);
+  });
+  it('seeked during an ad reasserts without replacing the original snapshot', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot());
+    const marker = h.video.el.getAttribute(BOOST_MARKER_ATTR);
+    h.video.el.dispatchEvent(new Event('seeked'));
+    expect(h.video.el.getAttribute(BOOST_MARKER_ATTR)).toBe(marker);
+    h.controller.updateSettings(applyPatch(defaultSettings(), { enabled: false }));
+    expect(h.video.playbackRate).toBe(1.5);
+    expect(h.video.muted).toBe(false);
+  });
+});

@@ -485,3 +485,19 @@ describe('navigation (§2.3)', () => {
     expect(s.navigations).toHaveLength(0);
   });
 });
+
+it('Phase 6: 500 watched mutations before the next frame cost one evaluation; never observes body subtree', async () => {
+  const observe = vi.spyOn(MutationObserver.prototype, 'observe');
+  const s = await start();
+  await settle();
+  const before = s.adapter.evaluationCount;
+  const root = document.querySelector('#movie_player');
+  if (!root) throw new Error('Missing root');
+  for (let n = 0; n < 500; n++) root.classList.toggle('ad-showing');
+  await settle();
+  expect(s.adapter.evaluationCount - before).toBe(1);
+  expect(
+    observe.mock.calls.some(([target, opts]) => target === document.body && opts?.subtree),
+  ).toBe(false);
+  observe.mockRestore();
+});

@@ -233,7 +233,7 @@ into one `queueMicrotask` re-score, so a burst of 40 mutations costs one evaluat
   `ssaiSuspected` (§3.4). This absorbs the class flicker between pod ads. Between the two
   thresholds the current state is kept.
 - "Segment over" means exactly that: `confidence ≤ exitThreshold` for the full exit debounce.
-- Thresholds are engine constants, overridable from the options page's debug panel.
+- Thresholds are engine constants, overridable from the options page's debug panel. D28: optional validated settings require 0 <= exit < enter <= 1 and a 100–1000 ms exit delay; updates apply live.
 
 ### 2.2 Registry
 
@@ -657,7 +657,8 @@ section 1 works unchanged.
 Permissions stay minimal: `storage` plus the target hosts. No `tabs`, `scripting`,
 `webRequest` or `declarativeNetRequest`. The badge uses
 `action.setBadgeText({ tabId: sender.tab.id })`, which needs no extra permission. The Netflix
-script is declared statically and exits on its first line unless the user has enabled Netflix.
+script is declared statically. D27: while disabled it installs only a settings listener;
+its adapter starts after opt-in without requiring a page reload.
 
 ### 4.2 Per-browser differences
 
@@ -829,6 +830,9 @@ indices in `docs/selector-log.md`.
 
 ### Phase 4 — Netflix adapter & extensibility
 
+D26 / this run’s explicit override replaces the capture stop below with provisional chains
+and a fixture built from the same guesses. Live capture and DRM testing remain manual gates.
+
 ```text
 Read docs/BUILD_PLAN.md section 2.4.
 1. Write docs/netflix-discovery.md: a checklist and a console snippet I will
@@ -881,6 +885,9 @@ Add unit tests for formatting and settings round-trips.
 
 ### Phase 6 — Hardening, testing & packaging
 
+D29 retains §2.1 microtask scheduling and tests synchronous 500-mutation bursts. D30 separates
+buildable release candidates from manual release gates; no store submission is implied.
+
 ```text
 1. Edge-case tests (unit or e2e): extension disabled mid-ad; extension
    reloaded mid-ad (orphan path + crash marker); tab hidden during ad; seek
@@ -929,12 +936,12 @@ Add unit tests for formatting and settings round-trips.
 
 - [ ] `typecheck`, `lint`, unit and e2e green in CI
 - [ ] Manual matrix run on all four browsers, results in `docs/selector-log.md`
-- [ ] No `playbackRate` / `muted` writes outside `VideoEngine.ts`
-- [ ] Permissions are exactly `storage` + target hosts
-- [ ] Netflix ships disabled and labelled Experimental
+- [x] No `playbackRate` / `muted` writes outside `VideoEngine.ts`
+- [x] Permissions are exactly `storage` + target hosts
+- [x] Netflix ships disabled and labelled Experimental
 - [ ] Store policies reviewed for Chrome Web Store, Edge Add-ons, AMO and App Store
-- [ ] Privacy statement: no data leaves the device
-- [ ] Version bumped in `package.json`; zips and AMO source archive built
+- [x] Privacy statement: no data leaves the device
+- [x] Version bumped in `package.json`; zips and AMO source archive built
 - [ ] Safari app signed and submitted via App Store Connect
 
 ## Resolved decisions
@@ -1055,3 +1062,14 @@ Places where the plan was ambiguous or self-contradictory, resolved with the own
   100–1000 ms exit delay), applied live. Popup shows the cached probe ceiling bounded by
   platform hint; before probing this is a candidate ceiling, explicitly labelled as checked
   when an ad starts. Rejected probing during ordinary content because it changes playback.
+
+- **D29 — PROVISIONAL — confirm with user.** (§2.1, §5 Phase 6) Preserve the explicit
+  microtask-coalescing contract and test a synchronous 500-mutation burst (one evaluation).
+  Rejected replacing it with animation-frame-only scheduling, which can pause in hidden tabs
+  and changes existing latency semantics. Separate mutation deliveries within one frame can
+  still produce multiple evaluations; a universal frame-rate bound is not claimed.
+- **D30 — PROVISIONAL — confirm with user.** (§4.3, §5 Phase 6, Appendix) Version 0.2.0
+  is an internal review candidate. Build browser zips and an allow-listed AMO source archive;
+  defer signing, store policy approval/submission, live-site verification and Firefox/Safari
+  execution to documented manual gates. Rejected calling the Appendix fully complete without
+  those checks. Safari web assets can build on Windows; Xcode conversion requires macOS.

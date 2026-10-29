@@ -5,7 +5,7 @@
   background: #fff;
   --surface: #f1f3f4;
   --accent: #185abc;
-  --line: #dadce0;
+  --line: #80868b;
   --secondary: #51565c;
 }
 * {
@@ -118,7 +118,7 @@ summary {
     background: #202124;
     --surface: #303134;
     --accent: #a8c7fa;
-    --line: #6f747b;
+    --line: #80868b;
     --secondary: #bdc1c6;
   }
   #error {

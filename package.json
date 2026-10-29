@@ -1,7 +1,7 @@
 {
   "name": "adspeeder",
   "description": "Speeds up and mutes video ads, then restores your exact playback state.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {

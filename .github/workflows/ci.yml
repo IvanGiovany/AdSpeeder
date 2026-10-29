@@ -18,7 +18,7 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run lint
-      - run: npm test
+      - run: npm run test:coverage
       - run: npm run build
       - run: npx playwright install --with-deps chromium
       # Loads the Chromium build from `npm run build` against local fixtures only.
