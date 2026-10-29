@@ -21,6 +21,8 @@ export class StatsMeter {
   private rate = 1;
   private podIndex: number | null = null;
   private last: { media: number; wall: number } | null = null;
+  /** D25: EXIT_PENDING plays at the user's rate, so no time is being saved. */
+  private paused = false;
 
   constructor(private readonly now: () => number = () => performance.now()) {}
 
@@ -49,7 +51,7 @@ export class StatsMeter {
   }
 
   sample(currentTime: number): void {
-    if (!this.active) return;
+    if (!this.active || this.paused) return;
     const wall = this.now();
     const last = this.last;
     this.last = { media: currentTime, wall };
@@ -62,6 +64,20 @@ export class StatsMeter {
     this.secondsSaved += Math.max(0, media - elapsed);
   }
 
+  /** D25: stops accumulating (rate restored, segment kept) after counting up to `currentTime`. */
+  pause(currentTime: number): void {
+    if (!this.active || this.paused) return;
+    this.sample(currentTime);
+    this.paused = true;
+  }
+
+  /** D25: the pod continued and the rate is boosted again; counting restarts from here. */
+  resume(currentTime: number): void {
+    if (!this.active || !this.paused) return;
+    this.paused = false;
+    this.last = { media: currentTime, wall: this.now() };
+  }
+
   /** Drops the baseline after a seek or node swap; the next sample starts a new interval. */
   resync(): void {
     this.last = null;
@@ -70,6 +86,7 @@ export class StatsMeter {
   endSegment(currentTime?: number): void {
     if (currentTime !== undefined) this.sample(currentTime);
     this.active = false;
+    this.paused = false;
     this.last = null;
     this.podIndex = null;
   }

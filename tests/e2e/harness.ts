@@ -33,6 +33,9 @@ export interface LogEntry {
   t: number;
   what: string;
   value?: unknown;
+  /** The video's currentTime and duration when the entry was logged. */
+  ct: number | null;
+  dur: number | null;
 }
 
 /**
@@ -108,6 +111,30 @@ export function runScenario(page: Page): Promise<LogEntry[]> {
   return page.evaluate(() =>
     (window as unknown as { AdFixture: { run(): Promise<LogEntry[]> } }).AdFixture.run(),
   );
+}
+
+/**
+ * Media seconds played between the entries at times `from` and `to`, from the logged
+ * currentTime. A `src` entry restarts the count at 0 (new source); any other backwards step
+ * is the looping clip wrapping around, counted as (duration − last) + current.
+ */
+export function mediaAdvanced(log: LogEntry[], from: number, to: number): number {
+  let total = 0;
+  let last: { ct: number; dur: number | null } | null = null;
+  for (const e of log) {
+    if (e.t < from || e.t > to || e.ct === null) continue;
+    if (e.what === 'src') {
+      last = { ct: 0, dur: null };
+      continue;
+    }
+    if (last !== null) {
+      const dur = e.dur ?? last.dur;
+      if (e.ct >= last.ct) total += e.ct - last.ct;
+      else if (dur !== null) total += dur - last.ct + e.ct;
+    }
+    last = { ct: e.ct, dur: e.dur };
+  }
+  return total;
 }
 
 /** Time of the first entry matching `what` (and `value`, if given) at or after `after`. */

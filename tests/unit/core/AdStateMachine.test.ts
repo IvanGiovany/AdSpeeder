@@ -29,11 +29,21 @@ describe('AdStateMachine.reduce', () => {
     }
   });
 
-  it('BOOSTING → EXIT_PENDING with the event’s debounce; recovery returns without re-boosting', () => {
+  it('BOOSTING → EXIT_PENDING gives the rate back and disarms the guard (D25)', () => {
     const [pending, effects] = reduce(s('BOOSTING'), { ...ended, exitDelayMs: 1000 });
     expect(pending).toEqual(s('EXIT_PENDING'));
-    expect(effects).toEqual([{ type: 'start-exit-timer', ms: 1000 }]);
-    expect(reduce(pending, engaged)).toEqual([s('BOOSTING'), [{ type: 'cancel-exit-timer' }]]);
+    expect(effects).toEqual([
+      { type: 'disarm-guard' },
+      { type: 'restore-rate' },
+      { type: 'start-exit-timer', ms: 1000 },
+    ]);
+  });
+
+  it('recovery from EXIT_PENDING re-boosts from the same snapshot and re-arms the guard', () => {
+    expect(reduce(s('EXIT_PENDING'), engaged)).toEqual([
+      s('BOOSTING'),
+      [{ type: 'cancel-exit-timer' }, { type: 'reboost' }, { type: 'arm-guard' }],
+    ]);
   });
 
   it('BOOSTING ignores detections that have not ended', () => {
@@ -57,9 +67,14 @@ describe('AdStateMachine.reduce', () => {
   });
 
   it('CONTESTED still follows the exit path and returns to CONTESTED on recovery', () => {
-    const [pending] = reduce(s('CONTESTED', true), ended);
+    const [pending, effects] = reduce(s('CONTESTED', true), ended);
     expect(pending).toEqual(s('EXIT_PENDING', true));
-    expect(reduce(pending, engaged)[0]).toEqual(s('CONTESTED', true));
+    expect(effects).toContainEqual({ type: 'restore-rate' });
+    // D25: a contested segment stays rate-free: no reboost, no guard.
+    expect(reduce(pending, engaged)).toEqual([
+      s('CONTESTED', true),
+      [{ type: 'cancel-exit-timer' }],
+    ]);
     expect(reduce(pending, { type: 'exit-debounce-elapsed' })[0]).toEqual(s('RESTORING'));
     expect(reduce(s('CONTESTED', true), { type: 'guard-exhausted' })).toEqual([
       s('CONTESTED', true),
@@ -67,11 +82,8 @@ describe('AdStateMachine.reduce', () => {
     ]);
   });
 
-  it('guard exhaustion during EXIT_PENDING marks the segment contested once', () => {
-    const [next, effects] = reduce(s('EXIT_PENDING'), { type: 'guard-exhausted' });
-    expect(next).toEqual(s('EXIT_PENDING', true));
-    expect(effects).toEqual([{ type: 'disarm-guard' }]);
-    expect(reduce(next, { type: 'guard-exhausted' })).toEqual([next, []]);
+  it('EXIT_PENDING ignores guard-exhausted: the guard is disarmed there (D25)', () => {
+    expect(reduce(s('EXIT_PENDING'), { type: 'guard-exhausted' })).toEqual([s('EXIT_PENDING'), []]);
   });
 
   it('force-restore from any boosted state funnels into RESTORING with its reason', () => {

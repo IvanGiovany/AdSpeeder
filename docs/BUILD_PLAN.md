@@ -371,13 +371,13 @@ one idempotent `restore()`, so no failure mode can leave the user at 16x or mute
 
 ### 3.1 State machine
 
-| State          | Entered when                                        | Engine action                                                                                                                 |
-| -------------- | --------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
-| `IDLE`         | Startup, or after restore                           | Nothing applied; no snapshot held                                                                                             |
-| `BOOSTING`     | Confidence ≥ enter threshold and capabilities allow | Take snapshot (only from `IDLE`), apply rate + mute, arm `RateGuard`                                                          |
-| `EXIT_PENDING` | Confidence falls below exit threshold               | Keep boost; start `exitDebounceMs` timer. If confidence recovers → back to `BOOSTING` with the same snapshot (pod transition) |
-| `CONTESTED`    | `RateGuard` budget exhausted                        | Stop rewriting rate; keep mute; still follows the exit path. Sticky for the segment (D10)                                     |
-| `RESTORING`    | Debounce elapsed, or any force-restore trigger      | Call `restore()`, verify after 500 ms, go to `IDLE`                                                                           |
+| State          | Entered when                                        | Engine action                                                                                                                                                                                                                      |
+| -------------- | --------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `IDLE`         | Startup, or after restore                           | Nothing applied; no snapshot held                                                                                                                                                                                                  |
+| `BOOSTING`     | Confidence ≥ enter threshold and capabilities allow | Take snapshot (only from `IDLE`), apply rate + mute, arm `RateGuard`                                                                                                                                                               |
+| `EXIT_PENDING` | Confidence falls below exit threshold               | D25: `restoreRate()` (speed back now), keep mute, snapshot and marker; disarm `RateGuard`; start `exitDebounceMs` timer. If confidence recovers → `BOOSTING`: re-boost from the same snapshot, re-arm `RateGuard` (pod transition) |
+| `CONTESTED`    | `RateGuard` budget exhausted                        | Stop rewriting rate; keep mute; still follows the exit path. Sticky for the segment (D10)                                                                                                                                          |
+| `RESTORING`    | Debounce elapsed, or any force-restore trigger      | Call `restore()` (unmute; rate rewritten if a load reset it), clear snapshot + marker, verify after 500 ms, go to `IDLE`                                                                                                           |
 
 _Engine state machine · 5 states_ (PDF p.11 diagram; sketch reconstructed from the table above):
 
@@ -386,7 +386,7 @@ stateDiagram-v2
   [*] --> IDLE
   IDLE --> BOOSTING: confidence ≥ enter threshold & capabilities allow
   BOOSTING --> EXIT_PENDING: confidence ≤ exit threshold
-  EXIT_PENDING --> BOOSTING: confidence recovers (pod transition; CONTESTED if contested)
+  EXIT_PENDING --> BOOSTING: confidence recovers (re-boost, same snapshot; CONTESTED if contested)
   BOOSTING --> CONTESTED: RateGuard budget exhausted
   CONTESTED --> RESTORING: exit path
   EXIT_PENDING --> RESTORING: debounce elapsed
@@ -396,7 +396,22 @@ stateDiagram-v2
 Pod transitions loop between `BOOSTING` and `EXIT_PENDING` without re-snapshotting; every exit
 funnels into `RESTORING`. `CONTESTED` is sticky for the segment (D10): if confidence recovers
 during the exit debounce of a contested segment, the machine returns to `CONTESTED`, not
-`BOOSTING`, so `RateGuard` is never re-armed mid-segment.
+`BOOSTING`, so `RateGuard` is never re-armed mid-segment, and the rate stays restored (D25).
+
+**Two-stage exit (D25).** Leaving an ad is split so content never plays at the boost rate
+while the exit is being confirmed:
+
+1. Entering `EXIT_PENDING`: `restoreRate()` puts `playbackRate`, `defaultPlaybackRate` and
+   `preservesPitch` back from the snapshot at once. `muted`, the snapshot and the crash marker
+   stay. `RateGuard` is disarmed, load events no longer re-assert the rate, a settings change
+   updates only the mute, and `StatsMeter` stops counting time saved. The segment cap switches
+   to the muted-only limit (the rate is no longer boosted), keeping the time already spent.
+2. Confidence recovers (the next pod ad): boost the rate again from the same snapshot and
+   re-arm `RateGuard`, unless the segment is `CONTESTED`, which stays rate-free.
+3. The exit debounce elapses: `restore()` unmutes, rewrites the rate if a load reset it during
+   the debounce, clears the snapshot and the marker, and runs the 500 ms verification.
+
+Force-restore triggers still restore everything at once.
 
 **Segment caps (D9).** Wall-clock time is measured per segment from the moment of boosting. The
 limit depends on the current mode: `maxBoostedMs` = 90 s while the rate is boosted,
@@ -432,7 +447,9 @@ export class VideoEngine {
   boost(v: HTMLVideoElement, opts: { rate: number | null; mute: boolean }): number | null;
   // after load events / guard; { rate: false } re-mutes only (CONTESTED)
   reassert(v: HTMLVideoElement, opts?: { rate?: boolean }): void;
-  restore(v: HTMLVideoElement | null): boolean; // idempotent, safe on detached nodes
+  // D25 first exit stage: rate fields only; keeps mute, snapshot and marker
+  restoreRate(v: HTMLVideoElement | null): boolean;
+  restore(v: HTMLVideoElement | null): boolean; // full restore; idempotent, safe on detached nodes
   transfer(from: HTMLVideoElement, to: HTMLVideoElement): void; // node swap mid-ad
   isBoosted(v: HTMLVideoElement): boolean;
   appliedRate(v: HTMLVideoElement): number | null; // D11
@@ -466,12 +483,20 @@ export class VideoEngine {
    segment's user overrides (D11).
 4. Schedule a 500 ms verification. YouTube re-applies its own saved speed when content resumes;
    if the rate then differs from the snapshot and from 1.0, accept the site's value (it is the
-   user's preference), log it, and stop.
+   user's preference), log it, and stop. A rate of 1.0 or the segment's last boost rate is
+   rewritten once.
+
+**Restoring the rate only (D25).** `restoreRate()` runs step 2 for the rate fields alone
+(`playbackRate`, `defaultPlaybackRate`, `preservesPitch`) and stops re-applying the boost rate,
+so `reassert()` re-mutes but leaves the rate alone. It keeps `muted`, the snapshot and the
+marker. A later `boost()` re-boosts from the same snapshot. `restore()` stays the full,
+idempotent restore; after `restoreRate()` it writes the rate again only if it differs from the
+snapshot (for example, a load reset to 1.0 during the debounce).
 
 **Why also re-assert on load events.** The HTML media load algorithm resets `playbackRate` to
 `defaultPlaybackRate` whenever a new source loads. Pods that swap the ad src would silently drop
-to 1x, so during `BOOSTING` the engine calls `reassert()` on `loadedmetadata`, `playing` and
-`seeked`. It does not raise `defaultPlaybackRate`, which keeps a missed restore from persisting
+to 1x, so during `BOOSTING` (only) the engine calls `reassert()` on `loadedmetadata`, `playing`
+and `seeked`. It does not raise `defaultPlaybackRate`, which keeps a missed restore from persisting
 across loads.
 
 ### 3.3 State preservation and user intent
@@ -496,7 +521,9 @@ across loads.
 ### 3.4 Multi-ad pods and stitched streams
 
 - Pods hold one snapshot for the whole pod. `EXIT_PENDING`'s debounce bridges the class flicker
-  between Ad 1 and Ad 2.
+  between Ad 1 and Ad 2. With D25 the rate steps down to the user's speed during the flicker
+  and is boosted again from the same snapshot when Ad 2 is detected; the mute is held
+  throughout, and the snapshot and marker are written once and removed once.
 - When pod info is present and `index < total`, exit debounce extends to 1,000 ms because
   another ad is known to follow.
 - A pod index increment counts as a new ad in stats; a new `<video>` node mid-pod triggers
@@ -504,6 +531,8 @@ across loads.
 - With `ssaiSuspected`, the exit debounce drops to 100 ms (2.3), trading a little flicker for
   never fast-forwarding real content. The engine owns all three debounces (D8); the segment cap
   applies to every segment (D9).
+- D25: in every case the speed comes back as soon as `EXIT_PENDING` starts, so the debounce
+  costs at most `debounce × the user's rate` of content played muted, never a fast-forward.
 
 ### 3.5 Rate-reset defense (`RateGuard`)
 
@@ -992,3 +1021,12 @@ Places where the plan was ambiguous or self-contradictory, resolved with the own
 - **D24 — Manual-run log.** `docs/selector-log.md` has a "Manual run" table: date, browser,
   scenario (pre-roll / pod / mid-roll / skippable / live / navigate mid-ad), boost started,
   restore clean, chain indices, events (contested / detection-lost / drift), notes. (Appendix)
+- **D25 — Two-stage exit.** Speed comes back immediately; mute stays until the exit is
+  confirmed. Entering `EXIT_PENDING` calls `VideoEngine.restoreRate(v)` (rate fields only),
+  keeps mute, snapshot and marker, disarms `RateGuard`, and pauses `StatsMeter`. Recovery
+  re-boosts from the same snapshot and re-arms the guard, unless `CONTESTED` (stays rate-free).
+  The elapsed debounce runs the full `restore()` and the 500 ms verification. Force-restores
+  still restore everything at once. (§3.1, §3.2, §3.4) e2e: content advanced between the exit
+  and the full restore must be ≤ debounce × 1.0 + 50 ms. The SSAI check adds a named Chromium
+  allowance of 1.0 s of media: after a rate drop from 16x, Chromium's clock stalls about 30 ms
+  and then jumps 0.55–0.83 s while queued 16x audio drains, which the extension can't prevent.

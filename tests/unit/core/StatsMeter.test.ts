@@ -72,6 +72,37 @@ describe('StatsMeter time-saved arithmetic', () => {
   });
 });
 
+describe('StatsMeter pause/resume (D25)', () => {
+  it('counts up to the pause, nothing while paused, and again after resume', () => {
+    const { meter, tick } = meterWithClock();
+    meter.startSegment({ currentTime: 0, rate: 16 });
+    tick(1000);
+    meter.pause(16); // 16 media s in 1 s → 15 saved
+    tick(300);
+    meter.sample(16.45); // EXIT_PENDING at 1.5x: not time saved
+    meter.resume(16.45);
+    tick(1000);
+    meter.sample(32.45);
+    meter.endSegment();
+    const batch = meter.takeBatch();
+    expect(batch?.adsSeen).toBe(1);
+    expect(batch?.secondsSaved).toBeCloseTo(30, 9);
+  });
+
+  it('is a no-op outside a segment and when repeated', () => {
+    const { meter, tick } = meterWithClock();
+    meter.pause(0);
+    meter.resume(0);
+    meter.startSegment({ currentTime: 0, rate: 16 });
+    meter.resume(0); // not paused
+    tick(1000);
+    meter.pause(16);
+    meter.pause(40); // already paused: no second sample
+    meter.endSegment(60);
+    expect(meter.takeBatch()).toEqual({ adsSeen: 1, secondsSaved: 15 });
+  });
+});
+
 describe('StatsMeter ad counting', () => {
   it('counts each pod index increment as a new ad', () => {
     const { meter } = meterWithClock();

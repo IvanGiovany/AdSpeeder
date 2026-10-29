@@ -110,8 +110,10 @@ describe('boost and restore', () => {
 
     h.adapter.emit(IDLE_SNAPSHOT);
     expect(phase(h)).toBe('EXIT_PENDING');
+    // D25: the speed comes back at once; the mute waits for the confirmed exit.
+    expect(h.video.playbackRate).toBe(1.5);
     vi.advanceTimersByTime(299);
-    expect(h.video.playbackRate).toBe(16);
+    expect(h.video.muted).toBe(true);
     vi.advanceTimersByTime(1);
     expect(phase(h)).toBe('IDLE');
     expect(h.video.playbackRate).toBe(1.5);
@@ -186,22 +188,29 @@ describe('boost and restore', () => {
 });
 
 describe('pods and debounce (§3.4)', () => {
-  it('pod flicker under 300 ms keeps one snapshot', async () => {
+  it('a pod flicker inside the debounce re-boosts from one snapshot (D25)', async () => {
     const h = await setup();
     h.adapter.emit(adSnapshot({ pod: { index: 1, total: 2 } }));
+    const marker = h.video.el.getAttribute(BOOST_MARKER_ATTR);
     vi.advanceTimersByTime(5000);
     h.adapter.emit(flickerSnapshot());
+    expect(phase(h)).toBe('EXIT_PENDING');
+    expect(h.video.playbackRate).toBe(1.5);
+    expect(h.video.muted).toBe(true);
     vi.advanceTimersByTime(250);
     h.adapter.emit(adSnapshot({ pod: { index: 2, total: 2 } }));
     expect(phase(h)).toBe('BOOSTING');
+    expect(h.video.playbackRate).toBe(16);
+    expect(h.video.el.getAttribute(BOOST_MARKER_ATTR)).toBe(marker); // never re-taken
     vi.advanceTimersByTime(5000);
     h.adapter.emit(IDLE_SNAPSHOT);
     vi.advanceTimersByTime(300);
     expect(phase(h)).toBe('IDLE');
-    // One boost write, one restore write: the snapshot was never re-taken mid-pod.
-    expect(h.video.rateWrites).toEqual([16, 1.5]);
+    // The rate steps down and back up across the flicker; the mute is held throughout.
+    expect(h.video.rateWrites).toEqual([16, 1.5, 16, 1.5]);
     expect(h.video.mutedWrites).toEqual([true, false]);
     expect(h.video.playbackRate).toBe(1.5);
+    expect(h.video.el.hasAttribute(BOOST_MARKER_ATTR)).toBe(false);
   });
 
   it('extends the exit debounce to 1,000 ms while more pod ads are known to follow', async () => {
@@ -530,7 +539,7 @@ describe('status reporting', () => {
     expect(h.statuses.map((s) => [s.phase, s.rate])).toEqual([
       ['watching', null],
       ['boosting', 8],
-      ['boosting', 8],
+      ['boosting', null], // EXIT_PENDING: the rate is already back (D25)
       ['watching', null],
     ]);
     expect(h.statuses[1]?.pod).toEqual({ index: 1, total: 2 });
@@ -885,5 +894,139 @@ describe('cap check when timers are throttled (D19)', () => {
     skip(MAX_BOOSTED_MS);
     document.dispatchEvent(new Event('visibilitychange'));
     expect(phase(h)).toBe('IDLE');
+  });
+});
+
+describe('two-stage exit (D25)', () => {
+  /** Plays `ms` of wall time in 50 ms steps at whatever rate the video has at each step. */
+  function playFor(h: Harness, ms: number): void {
+    for (let t = 0; t < ms; t += 50) {
+      vi.advanceTimersByTime(50);
+      h.video.advance((50 / 1000) * h.video.playbackRate);
+    }
+  }
+
+  it('after the last ad, media time in EXIT_PENDING equals wall time; muted until it ends', async () => {
+    const h = await setup({ video: { playbackRate: 1 } });
+    h.adapter.emit(adSnapshot());
+    playFor(h, 1000);
+    h.adapter.emit(IDLE_SNAPSHOT);
+    expect(phase(h)).toBe('EXIT_PENDING');
+    const start = h.video.el.currentTime;
+    playFor(h, 250);
+    expect(phase(h)).toBe('EXIT_PENDING');
+    expect(h.video.el.currentTime - start).toBeCloseTo(0.25, 5);
+    expect(h.video.muted).toBe(true);
+    expect(h.video.el.hasAttribute(BOOST_MARKER_ATTR)).toBe(true);
+    playFor(h, 50);
+    expect(phase(h)).toBe('IDLE');
+    expect(h.video.el.currentTime - start).toBeCloseTo(0.3, 5);
+    expect(h.video.muted).toBe(false);
+    expect(h.video.el.hasAttribute(BOOST_MARKER_ATTR)).toBe(false);
+  });
+
+  it('a user at 1.5x is back at 1.5x the moment EXIT_PENDING starts, not 1.0', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot());
+    h.adapter.emit(IDLE_SNAPSHOT);
+    expect(phase(h)).toBe('EXIT_PENDING');
+    expect(h.video.playbackRate).toBe(1.5);
+    expect(h.video.rateWrites).toEqual([16, 1.5]);
+  });
+
+  it('neither the guard nor load events push the boost rate back during EXIT_PENDING', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot());
+    h.adapter.emit(IDLE_SNAPSHOT);
+    h.video.loadNewSource(); // content src loading: the rate drops to 1.0
+    await flushMicrotasks();
+    h.video.siteSetsRate(1.25);
+    await flushMicrotasks();
+    vi.advanceTimersByTime(299);
+    expect(h.video.rateWrites.filter((r) => r === 16)).toHaveLength(1); // the boost only
+    vi.advanceTimersByTime(1);
+    expect(phase(h)).toBe('IDLE');
+    expect(h.video.playbackRate).toBe(1.5); // the full restore still writes the snapshot
+    expect(h.video.muted).toBe(false);
+  });
+
+  it('re-arms the guard when the pod continues', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot({ pod: { index: 1, total: 2 } }));
+    h.adapter.emit(flickerSnapshot());
+    h.adapter.emit(adSnapshot({ pod: { index: 2, total: 2 } }));
+    h.video.siteSetsRate(1);
+    await flushMicrotasks();
+    vi.advanceTimersByTime(0);
+    expect(h.video.playbackRate).toBe(16);
+  });
+
+  it('a contested segment that continues stays rate-free', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot({ pod: { index: 1, total: 2 } }));
+    const fight = () => {
+      if (h.video.playbackRate !== 1) h.video.siteSetsRate(1);
+    };
+    h.video.el.addEventListener('ratechange', fight);
+    h.video.siteSetsRate(1);
+    for (let i = 0; i < 30 && phase(h) !== 'CONTESTED'; i++) {
+      await flushMicrotasks();
+      await vi.advanceTimersToNextTimerAsync();
+    }
+    expect(phase(h)).toBe('CONTESTED');
+    h.video.el.removeEventListener('ratechange', fight);
+    const writes = h.video.rateWrites.length;
+    h.adapter.emit(flickerSnapshot());
+    expect(h.video.playbackRate).toBe(1.5);
+    h.adapter.emit(adSnapshot({ pod: { index: 2, total: 2 } }));
+    expect(phase(h)).toBe('CONTESTED');
+    expect(h.video.playbackRate).toBe(1.5);
+    expect(h.video.rateWrites.slice(writes)).toEqual([1.5]);
+    expect(h.video.muted).toBe(true);
+  });
+
+  it('counts no time saved during EXIT_PENDING', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot());
+    playFor(h, 2000); // 2 s at 16x → 30 s saved
+    h.adapter.emit(IDLE_SNAPSHOT);
+    playFor(h, 300); // at the user's 1.5x: would add 0.15 s if it were counted
+    expect(phase(h)).toBe('IDLE');
+    expect(h.sendStats.mock.calls[0]?.[0].secondsSaved).toBeCloseTo(30, 5);
+  });
+
+  it('a settings change during EXIT_PENDING updates the mute but never re-boosts the rate', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot());
+    h.adapter.emit(IDLE_SNAPSHOT);
+    h.controller.updateSettings(applyPatch(defaultSettings(), { speed: 8, mute: false }));
+    expect(phase(h)).toBe('EXIT_PENDING');
+    expect(h.video.playbackRate).toBe(1.5);
+    expect(h.video.muted).toBe(false);
+  });
+
+  it('a force-restore during EXIT_PENDING restores everything at once', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot());
+    h.adapter.emit(IDLE_SNAPSHOT);
+    h.adapter.watchContext = false;
+    h.adapter.navigate('https://www.youtube.com/');
+    expect(phase(h)).toBe('IDLE');
+    expect(h.video.muted).toBe(false);
+    expect(h.video.playbackRate).toBe(1.5);
+    expect(h.video.el.hasAttribute(BOOST_MARKER_ATTR)).toBe(false);
+  });
+
+  it('a node swap during EXIT_PENDING gives the new node the user’s rate, still muted', async () => {
+    const h = await setup();
+    h.adapter.emit(adSnapshot());
+    h.adapter.emit(IDLE_SNAPSHOT);
+    const next = new FakeVideo({ playbackRate: 1 });
+    h.adapter.setVideo(next.el);
+    await flushMicrotasks();
+    expect(next.playbackRate).toBe(1.5);
+    expect(next.muted).toBe(true);
+    vi.advanceTimersByTime(300);
+    expect(next.muted).toBe(false);
   });
 });

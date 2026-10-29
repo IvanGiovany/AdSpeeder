@@ -16,6 +16,8 @@ export type OverrideKind = 'rate' | 'mute';
 interface ActiveBoost {
   requestedRate: number | null;
   appliedRate: number | null;
+  /** The last boost rate that stuck this segment, kept after restoreRate() for verification. */
+  boostedRate: number | null;
   mute: boolean;
   overrides: Set<OverrideKind>;
 }
@@ -58,6 +60,7 @@ export class VideoEngine {
     const boost: ActiveBoost = {
       requestedRate: opts.rate,
       appliedRate: null,
+      boostedRate: prev?.boostedRate ?? null,
       mute: opts.mute,
       overrides: prev?.overrides ?? new Set(),
     };
@@ -85,7 +88,24 @@ export class VideoEngine {
     if (options.rate !== false) this.applyRate(v, boost);
   }
 
-  /** Idempotent, safe on detached nodes. Returns whether a snapshot was restored. */
+  /**
+   * D25 first exit stage: gives back the rate fields (playbackRate, defaultPlaybackRate,
+   * preservesPitch) from the snapshot and stops re-applying the boost rate, but keeps the
+   * mute, the snapshot and the crash marker. A later boost() re-boosts from the same snapshot.
+   * Returns whether there was a boost to step down.
+   */
+  restoreRate(v: HTMLVideoElement | null): boolean {
+    if (!v) return false;
+    const snapshot = this.snapshots.get(v);
+    const boost = this.boosts.get(v);
+    if (!snapshot || !boost) return false;
+    boost.requestedRate = null;
+    boost.appliedRate = null;
+    this.writeRateFields(v, snapshot, !boost.overrides.has('rate'));
+    return true;
+  }
+
+  /** Full restore: rate fields, mute, snapshot and marker. Idempotent, safe on detached nodes. */
   restore(v: HTMLVideoElement | null): boolean {
     return v ? this.restoreElement(v, true) : false;
   }
@@ -144,7 +164,20 @@ export class VideoEngine {
     }
     const keepRate = boost?.overrides.has('rate') ?? false;
     const keepMute = boost?.overrides.has('mute') ?? false;
-    if (!keepRate) this.writeRate(v, snapshot.playbackRate);
+    // Rewritten even after restoreRate(): a load reset during EXIT_PENDING leaves 1.0 (D25).
+    this.writeRateFields(v, snapshot, !keepRate);
+    if (!keepMute) this.writeMuted(v, snapshot.muted);
+    // D12: the marker goes even if every write above failed; it must never outlive the boost.
+    // Dropping the boost entry above also clears this segment's user overrides (D11).
+    this.snapshots.delete(v);
+    if (verify && !keepRate) this.scheduleVerification(v, snapshot, boost?.boostedRate ?? null);
+    return true;
+  }
+
+  private writeRateFields(v: HTMLVideoElement, snapshot: MediaSnapshot, rate: boolean): void {
+    if (rate && !sameRate(v.playbackRate, snapshot.playbackRate)) {
+      this.writeRate(v, snapshot.playbackRate);
+    }
     this.attempt(() => {
       v.defaultPlaybackRate = snapshot.defaultPlaybackRate;
     });
@@ -153,12 +186,6 @@ export class VideoEngine {
         v.preservesPitch = snapshot.preservesPitch;
       });
     }
-    if (!keepMute) this.writeMuted(v, snapshot.muted);
-    // D12: the marker goes even if every write above failed; it must never outlive the boost.
-    // Dropping the boost entry above also clears this segment's user overrides (D11).
-    this.snapshots.delete(v);
-    if (verify && !keepRate) this.scheduleVerification(v, snapshot, boost?.appliedRate ?? null);
-    return true;
   }
 
   /**
@@ -214,6 +241,7 @@ export class VideoEngine {
     for (;;) {
       if (this.tryRate(v, rate)) {
         boost.appliedRate = rate;
+        boost.boostedRate = rate;
         return;
       }
       const ceiling = this.lowerBelow(v, rate);

@@ -243,7 +243,8 @@ export class Controller {
     } else if (!settings.platforms[this.adapter.id]) {
       this.forceRestore('platform-disabled');
     } else if (isBoostedPhase(this.machine.phase) && this.boostedVideo) {
-      this.applyBoost(this.boostedVideo); // speed or mute changed mid-segment
+      // Speed or mute changed mid-segment; EXIT_PENDING keeps the rate restored (D25).
+      this.applyBoost(this.boostedVideo, this.machine.phase !== 'EXIT_PENDING');
       this.syncCap();
     }
     if (this.latest) this.onSnapshot(this.latest);
@@ -361,6 +362,7 @@ export class Controller {
       this.guard.disarm();
       this.engine.transfer(boosted, next);
       this.boostedVideo = next;
+      if (this.machine.phase === 'EXIT_PENDING') this.engine.restoreRate(next);
       this.meter.resync();
       if (guardWasArmed) this.armGuard();
       this.syncCap();
@@ -377,7 +379,8 @@ export class Controller {
 
     // §3.2: the media load algorithm resets playbackRate on a new source.
     const onLoad = () => {
-      if (isBoosted()) this.engine.reassert(v, { rate: this.machine.phase !== 'CONTESTED' });
+      // The rate only while BOOSTING: not when CONTESTED, nor in EXIT_PENDING (D25).
+      if (isBoosted()) this.engine.reassert(v, { rate: this.machine.phase === 'BOOSTING' });
     };
     for (const type of ['loadedmetadata', 'playing', 'seeked']) {
       v.addEventListener(type, onLoad, { signal });
@@ -482,6 +485,20 @@ export class Controller {
         this.meter.startSegment({ currentTime: v.currentTime, rate, pod: this.latest?.pod });
         return;
       }
+      case 'restore-rate': {
+        const v = this.boostedVideo;
+        if (!v) return;
+        this.meter.pause(v.currentTime);
+        this.engine.restoreRate(v);
+        return;
+      }
+      case 'reboost': {
+        const v = this.boostedVideo;
+        if (!v) return;
+        this.applyBoost(v);
+        this.meter.resume(v.currentTime);
+        return;
+      }
       case 'arm-guard':
         this.armGuard();
         return;
@@ -522,11 +539,12 @@ export class Controller {
   }
 
   /** Applies the boost for the current settings and capabilities; returns the rate that stuck. */
-  private applyBoost(v: HTMLVideoElement): number | null {
+  private applyBoost(v: HTMLVideoElement, allowRate = true): number | null {
     const caps = this.adapter.getCapabilities();
-    const rate = caps.allowRateBoost
-      ? Math.min(this.settings.speed, caps.maxRateHint ?? Number.POSITIVE_INFINITY)
-      : null;
+    const rate =
+      allowRate && caps.allowRateBoost
+        ? Math.min(this.settings.speed, caps.maxRateHint ?? Number.POSITIVE_INFINITY)
+        : null;
     const applied = this.engine.boost(v, { rate, mute: caps.allowMute && this.settings.mute });
     this.meter.setRate(applied);
     return applied;

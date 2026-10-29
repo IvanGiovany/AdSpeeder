@@ -6,14 +6,22 @@
 // so the extension's MAIN-world bridge has something to read.
 //
 // It also records what the extension does to the <video> (rate, mute, crash marker), with
-// timestamps, in `AdFixture.log`.
+// timestamps and the video's currentTime, in `AdFixture.log`.
 (function (global) {
   'use strict';
   const doc = global.document;
   const MEDIA = '/__fixtures/media/clip.mp4';
+  // run() fetches the clip once and serves every src as a fresh blob: URL, like YouTube's
+  // MSE player, so a src swap starts playing without a network round trip.
+  let mediaBlob = null;
   const log = [];
-  const note = (what, value) => log.push({ t: global.performance.now(), what, value });
   const $ = (selector) => doc.querySelector(selector);
+  // `ct` and `dur` are the video's currentTime and duration at that moment (D25 overrun).
+  const note = (what, value) => {
+    const v = $('video');
+    const dur = v && Number.isFinite(v.duration) ? v.duration : null;
+    log.push({ t: global.performance.now(), what, value, ct: v ? v.currentTime : null, dur });
+  };
   const root = () => $('#movie_player') || $('.html5-video-player');
   const video = () => $('video');
   const adModule = () => $('.video-ads');
@@ -37,9 +45,13 @@
 
   /** Every action a scenario can take. Writes here play the role of YouTube or the user. */
   const actions = {
+    /** Swaps the src; playback carries on if it was playing, as YouTube's player does. */
     src(name) {
-      video().src = MEDIA + '?' + name;
+      const v = video();
+      const wasPlaying = !v.paused;
+      v.src = mediaBlob ? global.URL.createObjectURL(mediaBlob) : MEDIA + '?' + name;
       note('src', name);
+      if (wasPlaying) actions.play();
     },
     play() {
       const p = video().play && video().play();
@@ -144,6 +156,7 @@
     const v = video();
     v.addEventListener('ratechange', () => note('rate', v.playbackRate));
     v.addEventListener('volumechange', () => note('muted', v.muted));
+    v.addEventListener('playing', () => note('playing'));
     new global.MutationObserver(() =>
       note('marker', v.hasAttribute('data-adspeeder-boosted')),
     ).observe(v, { attributes: true, attributeFilter: ['data-adspeeder-boosted'] });
@@ -169,6 +182,11 @@
     },
     /** Plays the whole timeline in real time; resolves when it is done. */
     async run() {
+      try {
+        mediaBlob = await (await global.fetch(MEDIA)).blob();
+      } catch {
+        mediaBlob = null;
+      }
       for (const [delay, action, arg] of steps) {
         if (delay > 0) await sleep(delay);
         await actions[action](arg);

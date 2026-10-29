@@ -208,6 +208,84 @@ describe('restore', () => {
   });
 });
 
+describe('restoreRate (D25 first exit stage)', () => {
+  it('gives back the rate fields but keeps the mute, the snapshot and the marker', () => {
+    const video = new FakeVideo({ playbackRate: 1.5, defaultPlaybackRate: 1.25 });
+    engine.boost(video.el, { rate: 16, mute: true });
+    video.el.defaultPlaybackRate = 3; // the site changed it during the ad
+    video.el.preservesPitch = false;
+    expect(engine.restoreRate(video.el)).toBe(true);
+    expect(video.playbackRate).toBe(1.5);
+    expect(video.el.defaultPlaybackRate).toBe(1.25);
+    expect(video.el.preservesPitch).toBe(true);
+    expect(video.muted).toBe(true);
+    expect(video.el.hasAttribute(BOOST_MARKER_ATTR)).toBe(true);
+    expect(engine.isBoosted(video.el)).toBe(true);
+    expect(engine.appliedRate(video.el)).toBeNull();
+  });
+
+  it('stops re-applying the boost rate: reassert after a load reset leaves the rate alone', () => {
+    const video = new FakeVideo({ playbackRate: 1.5 });
+    engine.boost(video.el, { rate: 16, mute: true });
+    engine.restoreRate(video.el);
+    video.loadNewSource();
+    video.setMuted(false);
+    engine.reassert(video.el);
+    expect(video.playbackRate).toBe(1);
+    expect(video.muted).toBe(true);
+  });
+
+  it('a later boost() re-boosts from the same snapshot; restore() returns the user’s rate', () => {
+    const video = new FakeVideo({ playbackRate: 1.5 });
+    engine.boost(video.el, { rate: 16, mute: true });
+    const marker = video.el.getAttribute(BOOST_MARKER_ATTR);
+    engine.restoreRate(video.el);
+    expect(engine.boost(video.el, { rate: 16, mute: true })).toBe(16);
+    expect(video.el.getAttribute(BOOST_MARKER_ATTR)).toBe(marker);
+    engine.restore(video.el);
+    expect(video.playbackRate).toBe(1.5);
+    expect(video.muted).toBe(false);
+    expect(video.rateWrites).toEqual([16, 1.5, 16, 1.5]);
+  });
+
+  it('restore() after restoreRate() rewrites a load reset but not an unchanged rate', () => {
+    const video = new FakeVideo({ playbackRate: 1.5 });
+    engine.boost(video.el, { rate: 16, mute: true });
+    engine.restoreRate(video.el);
+    engine.restore(video.el);
+    expect(video.rateWrites).toEqual([16, 1.5]);
+
+    const reset = new FakeVideo({ playbackRate: 1.5 });
+    engine.boost(reset.el, { rate: 16, mute: true });
+    engine.restoreRate(reset.el);
+    reset.loadNewSource();
+    engine.restore(reset.el);
+    expect(reset.playbackRate).toBe(1.5);
+    expect(reset.el.hasAttribute(BOOST_MARKER_ATTR)).toBe(false);
+  });
+
+  it('keeps a user speed override, and returns false without a boost', () => {
+    const video = new FakeVideo({ playbackRate: 1.5 });
+    engine.boost(video.el, { rate: 16, mute: true });
+    video.siteSetsRate(2);
+    engine.markUserOverride(video.el, 'rate');
+    engine.restoreRate(video.el);
+    expect(video.playbackRate).toBe(2);
+    expect(engine.restoreRate(new FakeVideo().el)).toBe(false);
+    expect(engine.restoreRate(null)).toBe(false);
+  });
+
+  it('verification after the full restore still catches our boost rate leaking back', () => {
+    const video = new FakeVideo({ playbackRate: 1.5 });
+    engine.boost(video.el, { rate: 16, mute: true });
+    engine.restoreRate(video.el);
+    engine.restore(video.el);
+    video.siteSetsRate(16);
+    vi.advanceTimersByTime(VERIFY_DELAY_MS);
+    expect(video.playbackRate).toBe(1.5);
+  });
+});
+
 describe('restore verification (500 ms)', () => {
   function boostAndRestore(userRate: number) {
     const video = new FakeVideo({ playbackRate: userRate });

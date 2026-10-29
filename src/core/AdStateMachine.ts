@@ -40,6 +40,10 @@ export type MachineEvent =
 /** Side effects the Controller performs. The reducer owns no timers. */
 export type MachineEffect =
   | { type: 'boost' }
+  /** D25: EXIT_PENDING gives the rate back at once; mute, snapshot and marker stay. */
+  | { type: 'restore-rate' }
+  /** D25: the pod continued; boost the rate again from the same snapshot. */
+  | { type: 'reboost' }
   | { type: 'arm-guard' }
   | { type: 'disarm-guard' }
   | { type: 'start-exit-timer'; ms: number }
@@ -84,9 +88,14 @@ export function reduce(current: MachineState, event: MachineEvent): Transition {
     case 'BOOSTING':
     case 'CONTESTED':
       if (event.type === 'detection' && event.ended) {
+        // D25 two-stage exit: speed comes back now, mute only once the exit is confirmed.
         return [
           state('EXIT_PENDING', contested),
-          [{ type: 'start-exit-timer', ms: event.exitDelayMs }],
+          [
+            { type: 'disarm-guard' },
+            { type: 'restore-rate' },
+            { type: 'start-exit-timer', ms: event.exitDelayMs },
+          ],
         ];
       }
       if (event.type === 'guard-exhausted' && phase === 'BOOSTING') {
@@ -96,16 +105,15 @@ export function reduce(current: MachineState, event: MachineEvent): Transition {
 
     case 'EXIT_PENDING':
       if (event.type === 'detection' && !event.ended) {
-        // Pod transition: same snapshot, boost kept.
+        // Pod transition: same snapshot. A contested segment stays rate-free (D25).
+        if (contested) return [state('CONTESTED', true), [{ type: 'cancel-exit-timer' }]];
         return [
-          state(contested ? 'CONTESTED' : 'BOOSTING', contested),
-          [{ type: 'cancel-exit-timer' }],
+          state('BOOSTING'),
+          [{ type: 'cancel-exit-timer' }, { type: 'reboost' }, { type: 'arm-guard' }],
         ];
       }
       if (event.type === 'exit-debounce-elapsed') return restoring('segment-end');
-      if (event.type === 'guard-exhausted' && !contested) {
-        return [state('EXIT_PENDING', true), [{ type: 'disarm-guard' }]];
-      }
+      // The guard is disarmed in EXIT_PENDING (D25), so guard-exhausted cannot arrive.
       return unchanged;
 
     case 'RESTORING':
@@ -113,7 +121,7 @@ export function reduce(current: MachineState, event: MachineEvent): Transition {
   }
 }
 
-/** States in which a boost (snapshot + rate/mute) is held. */
+/** States holding a boost: snapshot and mute, plus the rate except in EXIT_PENDING (D25). */
 export function isBoostedPhase(phase: EngineState): boolean {
   return phase === 'BOOSTING' || phase === 'EXIT_PENDING' || phase === 'CONTESTED';
 }
