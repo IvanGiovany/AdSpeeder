@@ -12,7 +12,8 @@ guesses, not Netflix compatibility. Keep Netflix disabled until reviewing the ca
    ad countdown and whether markers remain hidden after the break.
 6. After updating selectors and fixture, enable Experimental Netflix. Try 2x then 4x,
    checking audio/mute restoration, buffering, stalls, navigation and title changes.
-   Do not raise the hint without measured evidence. Record results in selector-log.md.
+   D32 now permits up to 16x at the owner's request. Check 8x and 16x after lower speeds work;
+   rate acceptance alone does not prove smooth playback. Record results in selector-log.md.
 
 ```js
 (() => {

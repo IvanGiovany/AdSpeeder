@@ -1,6 +1,6 @@
 import { test, expect } from './harness';
 
-test('provisional Netflix: opt-in, ad boost capped at 4, exact restore and promo defaults', async ({
+test('captured Netflix ad label: opt-in, boost to 16, exact restore and promo defaults', async ({
   context,
 }) => {
   const worker = context.serviceWorkers()[0];
@@ -24,17 +24,17 @@ test('provisional Netflix: opt-in, ad boost capped at 4, exact restore and promo
   await page.locator('video').evaluate((v) => {
     (v as HTMLVideoElement).playbackRate = 1.5;
   });
-  await page.locator('[data-uia="ad-break"]').evaluate((el) => {
-    el.removeAttribute('hidden');
+  await page.locator('[data-uia="ads-info-text"]').evaluate((el) => {
+    el.textContent = 'Ad';
   });
   await expect
     .poll(() => page.locator('video').evaluate((v) => (v as HTMLVideoElement).playbackRate))
-    .toBe(4);
+    .toBe(16);
   await expect
     .poll(() => page.locator('video').evaluate((v) => (v as HTMLVideoElement).muted))
     .toBe(true);
-  await page.locator('[data-uia="ad-break"]').evaluate((el) => {
-    el.setAttribute('hidden', '');
+  await page.locator('[data-uia="ads-info-text"]').evaluate((el) => {
+    el.textContent = 'Episode';
   });
   await expect
     .poll(() =>

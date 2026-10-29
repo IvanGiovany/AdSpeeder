@@ -6,8 +6,8 @@ test('minimal settings UI: keyboard opt-in works in an existing Netflix tab, spe
   if (!worker) throw new Error('Missing worker');
   const page = await context.newPage();
   await page.goto('https://www.netflix.com/watch/123');
-  await page.locator('[data-uia="ad-break"]').evaluate((el) => {
-    el.removeAttribute('hidden');
+  await page.locator('[data-uia="ads-info-text"]').evaluate((el) => {
+    el.textContent = 'Ad';
   });
   const options = await context.newPage();
   await options.goto(new URL('/options.html', worker.url()).href);
@@ -20,7 +20,7 @@ test('minimal settings UI: keyboard opt-in works in an existing Netflix tab, spe
     .poll(() => page.locator('video').evaluate((el) => (el as HTMLVideoElement).playbackRate), {
       timeout: 1000,
     })
-    .toBe(4);
+    .toBe(16);
   await expect(toggle).toBeFocused();
   await options.reload();
   await expect(options.getByLabel('Netflix · Experimental')).toBeChecked();

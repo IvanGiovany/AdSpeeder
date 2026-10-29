@@ -19,13 +19,17 @@ async function start() {
   await adapter.init({ settings: defaultSettings(), signal: lifetime.signal, log: silentLogger() });
   return adapter;
 }
-it('detects only visible ad markers, caps at 4, reports provisional diagnostics', async () => {
+it('detects the captured Netflix ad label, permits 16x, reports selector diagnostics', async () => {
   const adapter = await start();
+  const label = document.querySelector('[data-uia="ads-info-text"]');
+  if (!label) throw new Error('Missing ad label');
   expect(adapter.evaluateNow().active).toBe(false);
-  document.querySelector('[data-uia="ad-break"]')?.removeAttribute('hidden');
-  expect(adapter.evaluateNow()).toMatchObject({ active: true, kind: 'ad', confidence: 0.9 });
-  expect(adapter.getCapabilities().maxRateHint).toBe(4);
-  expect(adapter.getDiagnostics().selectorsVersion).toMatch(/-provisional$/);
+  label.textContent = 'Ad';
+  expect(adapter.evaluateNow()).toMatchObject({ active: true, kind: 'ad', confidence: 0.6 });
+  label.textContent = 'Episode';
+  expect(adapter.evaluateNow().active).toBe(false);
+  expect(adapter.getCapabilities().maxRateHint).toBe(16);
+  expect(adapter.getDiagnostics().selectorsVersion).toBe('2026-10-30-capture-1');
   expect(adapter.isWatchContext(new URL('https://www.netflix.com/browse'))).toBe(false);
 });
 it.each(['intro', 'recap', 'promo'] as const)('reports %s separately', async (kind) => {

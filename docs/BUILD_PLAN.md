@@ -363,9 +363,9 @@ now; the selectors are filled in from that capture.
   is `ignore`; users can choose `speed` per kind in options. Clicking Skip stays out of scope.
 - **Video element:** Netflix swaps `<video>` nodes between titles; `MediaTracker` handles
   re-binding (3.5).
-- **Capabilities:** `rateEnforcement: 'guard'`, `maxRateHint: 4` until testing shows the player
-  tolerates more. A DRM player may stall at extreme rates; the Phase 4 checklist measures this
-  before raising the hint.
+- **Capabilities:** `rateEnforcement: 'guard'`, `maxRateHint: 16` at the owner's explicit request
+  (D32). The engine still probes and falls back when a rate is rejected. Real Netflix DRM
+  playback at 16x remains unverified; an accepted rate alone does not prove smooth playback.
 
 ## 3. Core Engine Mechanics & Safety Controls
 
@@ -840,7 +840,7 @@ Read docs/BUILD_PLAN.md section 2.4.
    during an ad break, intro and recap, and dumps them as JSON.
 2. Stop and wait for me to paste that JSON.
 3. Then fill platforms/netflix/selectors.ts from the capture, implement
-   NetflixAdapter (ad, intro, recap, promo signals; maxRateHint 4;
+   NetflixAdapter (ad, intro, recap, promo signals; maxRateHint 16 per D32;
    rateEnforcement 'guard'), netflix.content.ts that exits unless
    settings.platforms.netflix is true, and a fixture built from the capture.
 4. Create platforms/_template/TemplateAdapter.ts with TODO comments for each
@@ -1073,3 +1073,15 @@ Places where the plan was ambiguous or self-contradictory, resolved with the own
   defer signing, store policy approval/submission, live-site verification and Firefox/Safari
   execution to documented manual gates. Rejected calling the Appendix fully complete without
   those checks. Safari web assets can build on Windows; Xcode conversion requires macOS.
+
+- **D31 — Netflix captured ad label.** (§2.4, §5 Phase 4) A user supplied live console comparison
+  showed `[data-uia="ads-info-text"]` with trimmed text `Ad` during an ad and no such element
+  after content resumed. Detect this selector only when its text is exactly `Ad`; a passive
+  player sample still showed the ad label during transition. Other Netflix selectors remain
+  provisional and real playback/restoration are unverified.
+
+- **D32 — Netflix 16x opt-in ceiling.** (§2.4, §5 Phase 4) After reporting Netflix works,
+  the owner explicitly requested 16x. Raise `maxRateHint` from 4 to 16 while retaining the
+  engine's per-video rate probe and rejection fallback. Netflix remains Experimental and
+  disabled by default. This request overrides the prior requirement to measure before raising
+  the hint; live Firefox/Netflix playback at 16x still requires a manual check.

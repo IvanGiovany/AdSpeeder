@@ -16,7 +16,7 @@ export class NetflixAdapter extends BaseAdapter {
     return url.hostname === 'www.netflix.com' && /^\/watch\/[^/]+/.test(url.pathname);
   }
   getCapabilities(): AdapterCapabilities {
-    return { allowRateBoost: true, allowMute: true, rateEnforcement: 'guard', maxRateHint: 4 };
+    return { allowRateBoost: true, allowMute: true, rateEnforcement: 'guard', maxRateHint: 16 };
   }
   getInteractionRoot(): Element | null {
     return this.root;
@@ -33,6 +33,7 @@ export class NetflixAdapter extends BaseAdapter {
   private visible(key: keyof typeof SELECTORS): boolean {
     const el = this.root && this.match(key, this.root);
     if (!el) return false;
+    if (key === 'adBreak' && el.textContent.trim() !== 'Ad') return false;
     for (let node: Element | null = el; node; node = node.parentElement) {
       const style = getComputedStyle(node);
       if (node.hasAttribute('hidden') || style.display === 'none' || style.visibility === 'hidden')

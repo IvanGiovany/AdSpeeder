@@ -3,6 +3,15 @@
 Manual checks against real sites and browsers (§5 Phase 3, Appendix "Selector maintenance").
 Automated tests never touch the real sites; this file is where the hand-run results go.
 
+## Netflix live capture (user supplied, 2026-10-30)
+
+On a Netflix ad tier watch page, the page console returned `adInfo: true`, `adText: "Ad"`
+while the ad was playing. One transition sample still had `adInfo: true` with a passive player;
+after the episode resumed, `adInfo: false` and `adText: undefined`. The adapter now detects the
+visible `[data-uia="ads-info-text"]` only when its trimmed text is exactly `Ad`. This confirms
+the ad label signal for this capture; player root, video, countdown, intro, recap and promo
+selectors remain unverified. Real playback and restoration remain untested.
+
 ## 1. YouTube selector chains (manual, real site)
 
 **Setup.** Load the unpacked build (`npm run build`, then `.output/chrome-mv3` or

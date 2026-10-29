@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Allow Experimental Netflix ad speed up to 16x at the owner's request, with browser rejection
+  fallback preserved. Live Netflix playback at 16x remains unverified.
+
+- Updated Netflix's ad signal to the captured `ads-info-text` label (`Ad`) and added a local
+  content-state regression check. Other Netflix selectors and real playback remain unverified.
+
 ## 0.2.0 — 2026-10-30 (review candidate)
 
 - Netflix Experimental adapter with `2026-10-30-provisional` selector chains and local fixture;
