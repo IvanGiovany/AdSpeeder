@@ -7,6 +7,8 @@ requests.
 
 ## Source of truth
 
+- `docs/HANDOFF.md` says where the project is and what's next; keep it current at the end
+  of every phase. `AGENTS.md` mirrors these rules for other coding agents.
 - `docs/BUILD_PLAN.md` is the source of truth. Follow its section numbers (1–5, Appendix) and
   cite them when making decisions. Don't invent architecture that contradicts it.
 - If the spec is ambiguous or seems wrong, stop and ask instead of guessing.
