@@ -19,6 +19,11 @@ export interface AdapterCapabilities {
   allowMute: boolean;
   rateEnforcement: 'none' | 'guard';
   maxRateHint?: number; // platform-known ceiling below the browser's
+  /**
+   * D34: a `waiting` stall while boosted means playback outran the download; halve the rate
+   * for the rest of the segment (never below STALL_MIN_RATE). For streams that buffer slowly.
+   */
+  lowerRateOnStall?: boolean;
 }
 
 export interface AdapterContext {

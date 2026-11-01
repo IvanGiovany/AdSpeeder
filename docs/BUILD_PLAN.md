@@ -1085,3 +1085,13 @@ Places where the plan was ambiguous or self-contradictory, resolved with the own
   engine's per-video rate probe and rejection fallback. Netflix remains Experimental and
   disabled by default. This request overrides the prior requirement to measure before raising
   the hint; live Firefox/Netflix playback at 16x still requires a manual check.
+
+- **D34 — Netflix post-ad lag and leaked speed.** (§3.2, §3.5, §2.4) The owner reported that
+  after a Netflix ad, playback sometimes lags and stays fast. Two engine changes, unverified on
+  a live account: (1) after a full restore, `VideoEngine` watches `ratechange` for 4 s
+  (`RESTORE_WATCH_MS`) and undoes our exact boost rate if the site re-applies it, at most 3
+  times, beyond the one-shot 500 ms verification; other rates are left as the site's/user's.
+  (2) Adapters may opt in to `lowerRateOnStall` (Netflix does): a `waiting` stall while
+  BOOSTING, after 1 s of ad media, halves the rate for the rest of the segment (floor 2x);
+  the next segment starts at the full rate again. Rejected lowering Netflix's 16x ceiling
+  (D32 is the owner's explicit choice) and blanket stall handling for YouTube (no evidence).

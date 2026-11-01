@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Netflix (Experimental): if the player re-applies the ad speed shortly after an ad, AdSpeeder
+  now puts your speed back (D34). Buffering stalls during a boosted Netflix ad halve the ad
+  speed for the rest of that break instead of starving the stream. Unverified on a live account.
+
 - Allow Experimental Netflix ad speed up to 16x at the owner's request, with browser rejection
   fallback preserved. Live Netflix playback at 16x remains unverified.
 

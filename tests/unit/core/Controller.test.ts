@@ -5,6 +5,7 @@ import {
   MAX_MUTED_ONLY_MS,
   ORPHAN_CHECK_MS,
   SELECTOR_DRIFT_PAGES,
+  STALL_MIN_RATE,
   STATS_FLUSH_MS,
   type ControllerOptions,
 } from '../../../src/core/Controller';
@@ -436,6 +437,71 @@ describe('media node tracking (§3.6)', () => {
     vi.advanceTimersByTime(1000);
     expect(replacement.playbackRate).toBe(1.5); // the user's rate, from the moved snapshot
     expect(replacement.muted).toBe(false);
+  });
+});
+
+describe('buffering stalls (D34)', () => {
+  const stall = (h: Harness) => h.video.el.dispatchEvent(new Event('waiting'));
+  const stallAware = (a: FakeAdapter) => {
+    a.capabilities = { ...a.capabilities, lowerRateOnStall: true };
+  };
+
+  it('halves the rate on each stall, down to STALL_MIN_RATE, then resets next segment', async () => {
+    const h = await setup({ configure: stallAware });
+    h.adapter.emit(adSnapshot());
+    h.video.advance(2);
+    stall(h);
+    expect(h.video.playbackRate).toBe(8);
+    expect(h.statuses.at(-1)?.rate).toBe(8);
+    stall(h);
+    stall(h);
+    stall(h);
+    expect(h.video.playbackRate).toBe(STALL_MIN_RATE);
+
+    // The guard defends the lowered rate, not the original 16x.
+    h.video.siteSetsRate(1);
+    await flushMicrotasks();
+    vi.advanceTimersByTime(0);
+    expect(h.video.playbackRate).toBe(STALL_MIN_RATE);
+
+    h.adapter.emit(IDLE_SNAPSHOT);
+    vi.advanceTimersByTime(300);
+    expect(h.video.playbackRate).toBe(1.5);
+    h.adapter.emit(adSnapshot());
+    expect(h.video.playbackRate).toBe(16);
+  });
+
+  it('a pod flicker keeps the lowered rate within the segment', async () => {
+    const h = await setup({ configure: stallAware });
+    h.adapter.emit(adSnapshot());
+    h.video.advance(2);
+    stall(h);
+    h.adapter.emit(flickerSnapshot());
+    h.adapter.emit(adSnapshot());
+    expect(h.video.playbackRate).toBe(8);
+  });
+
+  it('ignores stalls while the ad is still loading, and on adapters that did not opt in', async () => {
+    const early = await setup({ configure: stallAware });
+    early.adapter.emit(adSnapshot());
+    early.video.advance(0.5);
+    stall(early);
+    expect(early.video.playbackRate).toBe(16);
+
+    const youtube = await setup();
+    youtube.adapter.emit(adSnapshot());
+    youtube.video.advance(2);
+    stall(youtube);
+    expect(youtube.video.playbackRate).toBe(16);
+  });
+
+  it('a stall after the ad (EXIT_PENDING) never re-boosts content', async () => {
+    const h = await setup({ configure: stallAware });
+    h.adapter.emit(adSnapshot());
+    h.video.advance(2);
+    h.adapter.emit(IDLE_SNAPSHOT);
+    stall(h);
+    expect(h.video.playbackRate).toBe(1.5);
   });
 });
 

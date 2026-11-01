@@ -29,6 +29,7 @@ it('detects the captured Netflix ad label, permits 16x, reports selector diagnos
   label.textContent = 'Episode';
   expect(adapter.evaluateNow().active).toBe(false);
   expect(adapter.getCapabilities().maxRateHint).toBe(16);
+  expect(adapter.getCapabilities().lowerRateOnStall).toBe(true);
   expect(adapter.getDiagnostics().selectorsVersion).toBe('2026-10-30-capture-1');
   expect(adapter.isWatchContext(new URL('https://www.netflix.com/browse'))).toBe(false);
 });

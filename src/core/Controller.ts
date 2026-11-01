@@ -35,6 +35,9 @@ export const STATS_FLUSH_MS = 10_000;
 export const TRUSTED_INPUT_WINDOW_MS = 500;
 export const POD_EXIT_DEBOUNCE_MS = 1_000;
 export const SSAI_EXIT_DEBOUNCE_MS = 100;
+/** D34: stall back-off never goes below this rate, and ignores stalls this early in the ad. */
+export const STALL_MIN_RATE = 2;
+export const STALL_GRACE_MEDIA_S = 1;
 /** §2.3: consecutive watch pages with a fallback selector before "selector drift" is logged. */
 export const SELECTOR_DRIFT_PAGES = 3;
 
@@ -103,6 +106,10 @@ export class Controller {
   private lastTrustedInputAt = Number.NEGATIVE_INFINITY;
   private exitTimer: ReturnType<typeof setTimeout> | null = null;
   private segmentStartedAt: number | null = null;
+  /** D34: per-segment rate ceiling lowered by buffering stalls; null = no stall seen. */
+  private stallCeiling: number | null = null;
+  /** D34: media time when the segment's boost began, for the stall grace period. */
+  private boostStartedAt = 0;
   private capTimer: ReturnType<typeof setTimeout> | null = null;
   private capMode: CapMode | null = null;
   private pageIsWatch = false;
@@ -135,7 +142,7 @@ export class Controller {
       { once: true, signal: this.lifetime.signal },
     );
 
-    this.engine = new VideoEngine(this.probe, this.log);
+    this.engine = new VideoEngine(this.probe, this.log, this.lifetime.signal);
     this.meter = new StatsMeter(this.now);
     this.guard = new RateGuard(
       {
@@ -396,6 +403,13 @@ export class Controller {
       { signal },
     );
     v.addEventListener(
+      'waiting',
+      () => {
+        if (isBoosted()) this.onStall(v);
+      },
+      { signal },
+    );
+    v.addEventListener(
       'timeupdate',
       () => {
         if (!isBoosted()) return;
@@ -431,6 +445,24 @@ export class Controller {
       },
       { signal },
     );
+  }
+
+  /**
+   * D34: playback ran out of buffered media while boosted. On adapters that opt in, halve the
+   * rate for the rest of the segment so the download can keep up; the stall at a high rate is
+   * also what left content rebuffering right after the ad.
+   */
+  private onStall(v: HTMLVideoElement): void {
+    if (this.machine.phase !== 'BOOSTING' || !this.adapter.getCapabilities().lowerRateOnStall)
+      return;
+    const applied = this.engine.appliedRate(v);
+    if (applied === null || applied <= STALL_MIN_RATE) return;
+    if (v.currentTime - this.boostStartedAt < STALL_GRACE_MEDIA_S) return; // ad still loading
+    this.stallCeiling = Math.max(STALL_MIN_RATE, applied / 2);
+    this.log.info(`stalled at ${String(applied)}x; lowering to ${String(this.stallCeiling)}x`);
+    this.applyBoost(v);
+    this.syncCap();
+    this.report();
   }
 
   private onUserRateOverride(v: HTMLVideoElement): void {
@@ -484,6 +516,8 @@ export class Controller {
         const v = this.tracker?.current;
         if (!v) return;
         this.boostedVideo = v;
+        this.stallCeiling = null;
+        this.boostStartedAt = v.currentTime;
         const rate = this.applyBoost(v);
         this.meter.startSegment({ currentTime: v.currentTime, rate, pod: this.latest?.pod });
         return;
@@ -531,6 +565,7 @@ export class Controller {
         this.boostedVideo = null;
         this.meter.endSegment(v?.currentTime);
         this.engine.restore(v);
+        this.stallCeiling = null;
         const current = this.tracker?.current ?? null;
         if (current !== v) this.engine.restore(current);
         this.lastActive = null;
@@ -546,7 +581,11 @@ export class Controller {
     const caps = this.adapter.getCapabilities();
     const rate =
       allowRate && caps.allowRateBoost
-        ? Math.min(this.settings.speed, caps.maxRateHint ?? Number.POSITIVE_INFINITY)
+        ? Math.min(
+            this.settings.speed,
+            caps.maxRateHint ?? Number.POSITIVE_INFINITY,
+            this.stallCeiling ?? Number.POSITIVE_INFINITY,
+          )
         : null;
     const applied = this.engine.boost(v, { rate, mute: caps.allowMute && this.settings.mute });
     this.meter.setRate(applied);

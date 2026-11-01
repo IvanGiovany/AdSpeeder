@@ -16,7 +16,14 @@ export class NetflixAdapter extends BaseAdapter {
     return url.hostname === 'www.netflix.com' && /^\/watch\/[^/]+/.test(url.pathname);
   }
   getCapabilities(): AdapterCapabilities {
-    return { allowRateBoost: true, allowMute: true, rateEnforcement: 'guard', maxRateHint: 16 };
+    return {
+      allowRateBoost: true,
+      allowMute: true,
+      rateEnforcement: 'guard',
+      maxRateHint: 16,
+      // D34: Netflix's DRM stream can't download ads at 16x; back off instead of stalling.
+      lowerRateOnStall: true,
+    };
   }
   getInteractionRoot(): Element | null {
     return this.root;

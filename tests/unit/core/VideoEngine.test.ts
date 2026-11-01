@@ -1,7 +1,12 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { RateProbe } from '../../../src/core/RateProbe';
 import { BOOST_MARKER_ATTR } from '../../../src/core/SessionSnapshot';
-import { VERIFY_DELAY_MS, VideoEngine } from '../../../src/core/VideoEngine';
+import {
+  MAX_LEAK_REWRITES,
+  RESTORE_WATCH_MS,
+  VERIFY_DELAY_MS,
+  VideoEngine,
+} from '../../../src/core/VideoEngine';
 import { FakeVideo } from '../helpers/FakeVideo';
 import { silentLogger } from '../helpers/logger';
 
@@ -320,6 +325,67 @@ describe('restore verification (500 ms)', () => {
     engine.boost(video.el, { rate: 16, mute: true });
     vi.advanceTimersByTime(VERIFY_DELAY_MS);
     expect(video.playbackRate).toBe(16);
+  });
+});
+
+describe('post-restore leak watch (D34)', () => {
+  function boostAndRestore(userRate: number) {
+    const video = new FakeVideo({ playbackRate: userRate });
+    engine.boost(video.el, { rate: 16, mute: true });
+    engine.restore(video.el);
+    return video;
+  }
+
+  it('undoes our boost rate when the site re-applies it seconds after the ad', async () => {
+    const video = boostAndRestore(1);
+    vi.advanceTimersByTime(2_000); // past the one-shot 500 ms verification
+    video.siteSetsRate(16);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(video.playbackRate).toBe(1);
+  });
+
+  it("leaves other rates alone: they are the site's or the user's", async () => {
+    const video = boostAndRestore(1);
+    vi.advanceTimersByTime(2_000);
+    video.siteSetsRate(1.5);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(video.playbackRate).toBe(1.5);
+  });
+
+  it('ends after RESTORE_WATCH_MS', async () => {
+    const video = boostAndRestore(1);
+    vi.advanceTimersByTime(RESTORE_WATCH_MS);
+    video.siteSetsRate(16);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(video.playbackRate).toBe(16);
+  });
+
+  it(`gives up after ${String(MAX_LEAK_REWRITES)} corrections instead of wrestling the site`, async () => {
+    const video = boostAndRestore(1);
+    vi.advanceTimersByTime(1_000);
+    for (let i = 0; i <= MAX_LEAK_REWRITES; i++) {
+      video.siteSetsRate(16);
+      await vi.advanceTimersByTimeAsync(0);
+    }
+    expect(video.playbackRate).toBe(16);
+  });
+
+  it('is torn down by a new boost and by the engine signal', async () => {
+    const video = boostAndRestore(1);
+    engine.boost(video.el, { rate: 8, mute: true });
+    video.siteSetsRate(16);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(video.playbackRate).toBe(16);
+
+    const lifetime = new AbortController();
+    const owned = new VideoEngine(probe, silentLogger(), lifetime.signal);
+    const other = new FakeVideo({ playbackRate: 1 });
+    owned.boost(other.el, { rate: 16, mute: true });
+    owned.restore(other.el);
+    lifetime.abort();
+    other.siteSetsRate(16);
+    await vi.advanceTimersByTimeAsync(VERIFY_DELAY_MS);
+    expect(other.playbackRate).toBe(16);
   });
 });
 

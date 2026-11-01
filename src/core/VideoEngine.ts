@@ -1,3 +1,4 @@
+import { childController } from '../shared/dom';
 import type { Logger } from '../shared/logger';
 import type { RateProbe } from './RateProbe';
 import { captureSnapshot, SnapshotStore, type MediaSnapshot } from './SessionSnapshot';
@@ -23,6 +24,13 @@ interface ActiveBoost {
 }
 
 export const VERIFY_DELAY_MS = 500;
+/**
+ * D34: after a full restore, a site that re-applies the last rate it saw (Netflix) can put our
+ * boost rate back seconds later. For this long, our exact boost rate reappearing is undone.
+ */
+export const RESTORE_WATCH_MS = 4_000;
+/** D34: stop correcting after this many leaks, so the engine never wrestles the site. */
+export const MAX_LEAK_REWRITES = 3;
 
 const RATE_EPSILON = 1e-3;
 
@@ -37,11 +45,13 @@ export function sameRate(a: number, b: number): boolean {
 export class VideoEngine {
   private readonly snapshots = new SnapshotStore();
   private readonly boosts = new WeakMap<HTMLVideoElement, ActiveBoost>();
-  private readonly verifications = new WeakMap<HTMLVideoElement, ReturnType<typeof setTimeout>>();
+  private readonly verifications = new WeakMap<HTMLVideoElement, AbortController>();
 
   constructor(
     private readonly probe: RateProbe,
     private readonly log: Logger,
+    /** Ends post-restore watches when the content script unloads (CLAUDE.md teardown rule). */
+    private readonly signal?: AbortSignal,
   ) {}
 
   /**
@@ -192,15 +202,17 @@ export class VideoEngine {
    * §3.2 restore step 4: YouTube re-applies its own saved speed when content resumes. A rate
    * that differs from the snapshot and from 1.0 is the site's (user's) preference and is kept;
    * 1.0 (a load-algorithm reset) or our own boost rate leaking back is rewritten once.
+   * D34: for RESTORE_WATCH_MS, our exact boost rate reappearing is also undone on `ratechange`.
    */
   private scheduleVerification(
     v: HTMLVideoElement,
     snapshot: MediaSnapshot,
     boostedRate: number | null,
   ): void {
-    const timer = setTimeout(() => {
-      this.verifications.delete(v);
-      if (!v.isConnected || this.boosts.has(v)) return;
+    const watch = this.signal ? childController(this.signal) : new AbortController();
+    const settled = () => !v.isConnected || this.boosts.has(v);
+    const verify = setTimeout(() => {
+      if (settled()) return;
       const current = v.playbackRate;
       if (sameRate(current, snapshot.playbackRate)) return;
       const leaked = boostedRate !== null && sameRate(current, boostedRate);
@@ -213,14 +225,39 @@ export class VideoEngine {
         this.log.info(`restore verification: keeping site rate ${String(current)}`);
       }
     }, VERIFY_DELAY_MS);
-    this.verifications.set(v, timer);
+    const end = setTimeout(() => {
+      watch.abort();
+    }, RESTORE_WATCH_MS);
+    watch.signal.addEventListener(
+      'abort',
+      () => {
+        clearTimeout(verify);
+        clearTimeout(end);
+        if (this.verifications.get(v) === watch) this.verifications.delete(v);
+      },
+      { once: true },
+    );
+    if (boostedRate !== null && !sameRate(boostedRate, snapshot.playbackRate)) {
+      let rewrites = 0;
+      v.addEventListener(
+        'ratechange',
+        () => {
+          if (settled() || !sameRate(v.playbackRate, boostedRate)) return;
+          if (rewrites >= MAX_LEAK_REWRITES) return;
+          rewrites += 1;
+          this.log.info(
+            `boost rate ${String(boostedRate)} leaked back after restore → ${String(snapshot.playbackRate)}`,
+          );
+          this.writeRate(v, snapshot.playbackRate);
+        },
+        { signal: watch.signal },
+      );
+    }
+    this.verifications.set(v, watch);
   }
 
   private cancelVerification(v: HTMLVideoElement): void {
-    const timer = this.verifications.get(v);
-    if (timer === undefined) return;
-    clearTimeout(timer);
-    this.verifications.delete(v);
+    this.verifications.get(v)?.abort();
   }
 
   private applyMute(v: HTMLVideoElement, boost: ActiveBoost): void {
