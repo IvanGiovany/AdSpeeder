@@ -76,6 +76,15 @@ function render() {
         ? `Current player ceiling: ${formatRate(status.maxRate)}. Speed is checked when an ad starts.`
         : 'Speed is checked when an ad starts.';
 }
+/** Drives the coloured block beside the status line (theme.css `.status[data-phase]`). */
+function statusPhase(access: boolean): string {
+  if (!settings.enabled) return 'off';
+  if (!access) return 'access';
+  return status?.phase ?? 'none';
+}
+const SPLASHES = ['Ads go zoom!', 'Less waiting!', 'Speedrun the ads!', 'Back to the video!'];
+const splash = document.getElementById('splash');
+if (splash) splash.textContent = SPLASHES[Math.floor(Math.random() * SPLASHES.length)] ?? '';
 let origins: string[] = [];
 const grant = document.getElementById('grant');
 grant?.addEventListener(
@@ -124,6 +133,7 @@ async function refresh() {
     render();
   } else status = next;
   const label = document.getElementById('status');
+  if (label) label.dataset.phase = statusPhase(access);
   if (label)
     label.textContent = !settings.enabled
       ? 'AdSpeeder is off'
@@ -140,9 +150,16 @@ async function refresh() {
       ['All time', stats.allTime],
     ] as const) {
       const cell = document.createElement('div');
+      cell.className = 'slot';
+      const name = document.createElement('span');
+      name.className = 'slot-label';
+      name.textContent = label;
       const strong = document.createElement('strong');
       strong.textContent = formatDuration(value.secondsSaved);
-      cell.append(label, strong, `${formatCount(value.adsSeen)} ads sped up`);
+      const count = document.createElement('span');
+      count.className = 'slot-sub';
+      count.textContent = `${formatCount(value.adsSeen)} ads sped up`;
+      cell.append(name, strong, count);
       target.append(cell);
     }
   }

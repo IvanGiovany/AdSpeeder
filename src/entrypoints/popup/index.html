@@ -7,14 +7,17 @@
     <link rel="stylesheet" href="./popup.css" />
   </head>
   <body>
-    <main>
+    <header class="hero">
       <h1>AdSpeeder</h1>
-      <p id="status" role="status">Checking this page…</p>
-      <button id="grant" hidden>Grant access</button>
-      <div id="controls"></div>
-      <p id="limit"></p>
-      <section class="card"><div id="stats" class="stats"></div></section>
-      <a href="options.html" target="_blank">Settings</a>
+      <p id="splash" class="splash" aria-hidden="true">Ads go zoom!</p>
+      <p id="status" class="status" role="status">Checking this page…</p>
+    </header>
+    <main>
+      <button id="grant" class="btn-primary" hidden>Grant access</button>
+      <div id="controls" class="panel"></div>
+      <p id="limit" class="note"></p>
+      <section aria-label="Time saved"><div id="stats" class="stats"></div></section>
+      <a class="btn settings-link" href="options.html" target="_blank">Settings</a>
       <p id="error" role="alert"></p>
     </main>
     <script type="module" src="./main.ts"></script>

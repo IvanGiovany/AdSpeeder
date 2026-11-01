@@ -1,0 +1,363 @@
+/*
+ * AdSpeeder "block" theme (D33). A chunky, pixel-built look inspired by sandbox block games:
+ * grass-and-dirt header band, bevelled stone controls, inset inventory-style slots and a
+ * bouncing splash line. All art below is original (hand-placed SVG pixels); no game assets,
+ * fonts or logos are used. Pixelify Sans is bundled under the SIL OFL (public/fonts).
+ */
+@font-face {
+  font-family: 'Pixelify Sans';
+  src: url('/fonts/PixelifySans.ttf') format('truetype');
+  font-weight: 400 700;
+  font-display: block;
+}
+
+:root {
+  color-scheme: dark;
+  --font-pixel: 'Pixelify Sans', ui-monospace, monospace;
+  --font-body: system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+
+  /* Deepslate night (default). */
+  --bg: #222228;
+  --text: #f4f4f6;
+  --muted: #bdbdc6;
+  --outline: #0c0c0e;
+  --panel: #3a3a42;
+  --panel-hi: #5a5a63;
+  --panel-lo: #1b1b20;
+  --slot: #2a2a31;
+  --slot-hi: #4b4b54;
+  --slot-lo: #121215;
+  --gold: #ffd84a;
+  --focus: #ffd84a;
+  --error: #ff8a80;
+  --knob: #9a9aa3;
+  --knob-hi: #c8c8cf;
+  --knob-lo: #5c5c64;
+
+  /* Shared regardless of theme: grass, dirt and the emerald action colour. */
+  --green: #2f7a22;
+  --green-hi: #5fb83b;
+  --green-lo: #17430f;
+  --grass: #5ea833;
+  --dirt-ink: #24170c;
+  --on-dirt: #fff8ee;
+
+  --pixel: 4px;
+  --bevel: inset 2px 2px 0 var(--panel-hi), inset -2px -4px 0 var(--panel-lo);
+  --bevel-pressed: inset 2px 4px 0 var(--panel-lo), inset -2px -2px 0 var(--panel-hi);
+  --inset: inset 2px 2px 0 var(--slot-lo), inset -2px -2px 0 var(--slot-hi);
+}
+
+/* Birch daylight. */
+@media (prefers-color-scheme: light) {
+  :root {
+    color-scheme: light;
+    --bg: #cfe6f3;
+    --text: #22190f;
+    --muted: #54483a;
+    --outline: #22190f;
+    --panel: #e8dfc6;
+    --panel-hi: #fbf7eb;
+    --panel-lo: #a99c78;
+    --slot: #d7cdb0;
+    --slot-hi: #f3eddc;
+    --slot-lo: #8f8262;
+    --gold: #7a4b00;
+    --focus: #1f43b5;
+    --error: #a3161a;
+    --knob: #b9b2a0;
+    --knob-hi: #e9e4d6;
+    --knob-lo: #7c7462;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+/* Component display rules below must never un-hide `hidden` elements (e.g. #grant). */
+[hidden] {
+  display: none !important;
+}
+html {
+  background: var(--bg);
+}
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font: 14px/1.5 var(--font-body);
+}
+
+h1,
+h2,
+.pixel {
+  font-family: var(--font-pixel);
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+p {
+  margin: 0;
+}
+a {
+  color: inherit;
+}
+:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* ---- Header band: grass over dirt ------------------------------------------------- */
+.hero {
+  position: relative;
+  padding: calc(var(--pixel) * 6) 16px 18px;
+  color: var(--on-dirt);
+  border-bottom: 2px solid var(--outline);
+  background-color: #7a5536;
+  background-image:
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 4' shape-rendering='crispEdges'%3E%3Cpath fill='%235ea833' d='M0 0h8v2H0z'/%3E%3Cpath fill='%2348902a' d='M1 0h1v1H1zM5 1h1v1H5zM3 0h1v1H3zM7 1h1v1H7z'/%3E%3Cpath fill='%235ea833' d='M0 2h1v1H0zM2 2h2v1H2zM3 3h1v1H3zM5 2h1v1H5zM7 2h1v2H7z'/%3E%3Cpath fill='%2348902a' d='M1 2h1v1H1zM6 2h1v1H6z'/%3E%3C/svg%3E"),
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8' shape-rendering='crispEdges'%3E%3Cpath fill='%237a5536' d='M0 0h8v8H0z'/%3E%3Cpath fill='%235f412a' d='M1 1h1v1H1zM5 0h1v1H5zM3 3h2v1H3zM7 4h1v1H7zM0 6h1v1H0zM4 6h1v1H4zM6 7h1v1H6z'/%3E%3Cpath fill='%238f6644' d='M2 0h1v1H2zM6 2h1v1H6zM0 3h1v1H0zM2 5h1v1H2zM5 5h1v1H5zM7 6h1v1H7z'/%3E%3Cpath fill='%23503522' d='M6 1h1v1H6zM1 4h1v1H1zM3 7h1v1H3z'/%3E%3C/svg%3E");
+  background-repeat: repeat-x, repeat;
+  background-size:
+    calc(var(--pixel) * 8) calc(var(--pixel) * 4),
+    calc(var(--pixel) * 8) calc(var(--pixel) * 8);
+  background-position:
+    0 0,
+    0 0;
+  image-rendering: pixelated;
+}
+.hero h1 {
+  margin: 0;
+  font-size: 30px;
+  line-height: 1.1;
+  color: #fff;
+  text-shadow:
+    3px 3px 0 var(--dirt-ink),
+    0 3px 0 var(--dirt-ink);
+}
+.splash {
+  position: absolute;
+  right: 14px;
+  top: 34px;
+  margin: 0;
+  font-family: var(--font-pixel);
+  font-weight: 700;
+  font-size: 13px;
+  color: #ffe94a;
+  text-shadow: 2px 2px 0 #3f3700;
+  transform: rotate(-14deg);
+  transform-origin: center;
+  pointer-events: none;
+  white-space: nowrap;
+}
+.status {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 12px;
+  padding: 6px 10px;
+  background: #1d130a;
+  border: 2px solid var(--dirt-ink);
+  color: var(--on-dirt);
+  font-size: 13px;
+}
+.status::before {
+  content: '';
+  flex: none;
+  width: 10px;
+  height: 10px;
+  background: #7d7d86;
+  box-shadow: inset -2px -2px 0 #4a4a52;
+}
+.status[data-phase='watching']::before {
+  background: #5fb83b;
+  box-shadow: inset -2px -2px 0 #2f7a22;
+}
+.status[data-phase='boosting']::before,
+.status[data-phase='contested']::before {
+  background: #ffd84a;
+  box-shadow: inset -2px -2px 0 #b48a00;
+}
+.status[data-phase='access']::before {
+  background: #ff6b5e;
+  box-shadow: inset -2px -2px 0 #a3161a;
+}
+
+/* ---- Stone panels, slots and controls -------------------------------------------- */
+.panel {
+  background: var(--panel);
+  border: 2px solid var(--outline);
+  box-shadow: var(--bevel);
+  padding: 4px 14px 8px;
+}
+.control {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 48px;
+  padding: 8px 0;
+}
+.control + .control {
+  border-top: 2px solid var(--panel-lo);
+}
+.note {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+button,
+select,
+input,
+.btn {
+  font: inherit;
+  color: inherit;
+}
+button,
+.btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 40px;
+  padding: 8px 16px 10px;
+  border: 2px solid var(--outline);
+  border-radius: 0;
+  background: var(--panel);
+  box-shadow: var(--bevel);
+  font-family: var(--font-pixel);
+  font-weight: 600;
+  font-size: 15px;
+  text-decoration: none;
+  cursor: pointer;
+}
+button:hover,
+.btn:hover {
+  background: color-mix(in srgb, var(--panel) 88%, var(--text));
+}
+button:active,
+.btn:active {
+  box-shadow: var(--bevel-pressed);
+  padding: 10px 16px 8px;
+}
+.btn-primary {
+  background: var(--green);
+  color: #fff;
+  box-shadow:
+    inset 2px 2px 0 var(--green-hi),
+    inset -2px -4px 0 var(--green-lo);
+  text-shadow: 2px 2px 0 var(--green-lo);
+}
+.btn-primary:hover {
+  background: #286b1d;
+}
+.btn-primary:active {
+  box-shadow:
+    inset 2px 4px 0 var(--green-lo),
+    inset -2px -2px 0 var(--green-hi);
+}
+
+select,
+input[type='number'] {
+  min-height: 36px;
+  border: 2px solid var(--outline);
+  border-radius: 0;
+  background-color: var(--slot);
+  box-shadow: var(--inset);
+  font-family: var(--font-pixel);
+  font-size: 15px;
+  font-weight: 600;
+}
+select {
+  appearance: none;
+  padding: 4px 34px 4px 12px;
+  cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 5 3' shape-rendering='crispEdges'%3E%3Cpath fill='%23888' d='M0 0h5v1H0zM1 1h3v1H1zM2 2h1v1H2z'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 10px center;
+  background-size: 15px 9px;
+}
+select option {
+  background: var(--panel);
+  color: var(--text);
+  font-family: var(--font-body);
+}
+input[type='number'] {
+  width: 110px;
+  padding: 4px 10px;
+}
+
+/* Block switch: a stone knob sliding along an inset slot; emerald when on. */
+.control input[type='checkbox'] {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 48px;
+  height: 26px;
+  margin: 0;
+  border: 2px solid var(--outline);
+  background: var(--slot);
+  box-shadow: var(--inset);
+  cursor: pointer;
+}
+.control input[type='checkbox']::before {
+  content: '';
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  background: var(--knob);
+  box-shadow:
+    inset 2px 2px 0 var(--knob-hi),
+    inset -2px -2px 0 var(--knob-lo),
+    0 0 0 2px var(--outline);
+}
+.control input[type='checkbox']:checked {
+  background: var(--green);
+  box-shadow:
+    inset 2px 2px 0 var(--green-lo),
+    inset -2px -2px 0 var(--green-hi);
+}
+.control input[type='checkbox']:checked::before {
+  left: 25px;
+  background: #8ee05e;
+  box-shadow:
+    inset 2px 2px 0 #c4f5a3,
+    inset -2px -2px 0 #4d9a2c,
+    0 0 0 2px var(--outline);
+}
+
+.tag {
+  display: inline-block;
+  padding: 0 6px 1px;
+  border: 2px solid var(--outline);
+  background: var(--gold);
+  color: var(--bg);
+  font-family: var(--font-pixel);
+  font-size: 12px;
+  font-weight: 700;
+}
+#error {
+  color: var(--error);
+  font-size: 13px;
+}
+#error:empty,
+#saved:empty {
+  display: none;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .splash {
+    animation: splash 520ms ease-in-out infinite alternate;
+  }
+  .control input[type='checkbox']::before {
+    transition: left 120ms steps(3, end);
+  }
+  @keyframes splash {
+    from {
+      transform: rotate(-14deg) scale(1);
+    }
+    to {
+      transform: rotate(-14deg) scale(1.1);
+    }
+  }
+}

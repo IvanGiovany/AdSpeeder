@@ -5,7 +5,7 @@ import { onMessage, type TabStatus } from '../shared/messaging';
 import { defaultSettings, migrateStoredSettings, STORAGE_KEY } from '../shared/settings';
 import { getStatsSummary, recordStatsBatch, resetStats } from '../shared/stats';
 
-const BADGE_COLOR = '#d32f2f';
+const BADGE_COLOR = '#2f7a22';
 
 const log = createLogger('background');
 

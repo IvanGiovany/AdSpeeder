@@ -8,19 +8,27 @@
     <link rel="stylesheet" href="./options.css" />
   </head>
   <body>
+    <header class="hero">
+      <div class="hero-inner">
+        <h1>Make yourself at home.</h1>
+        <p>AdSpeeder settings. Changes save automatically.</p>
+      </div>
+    </header>
     <main>
-      <h1>Make yourself at home.</h1>
-      <p>AdSpeeder settings · saved automatically</p>
-      <h2>Where it works</h2>
-      <div id="platforms"></div>
-      <p>
-        <span class="tag">Experimental</span> Netflix selectors are unverified. Playback may stall;
-        disabled by default.
-      </p>
-      <h2>Beyond ads</h2>
-      <p>Choose whether to speed through intros, recaps and previews.</p>
-      <div id="promos"></div>
-      <details>
+      <section>
+        <h2>Where it works</h2>
+        <div id="platforms" class="panel"></div>
+        <p class="note">
+          <span class="tag">Experimental</span> Netflix selectors are unverified. Playback may
+          stall; disabled by default.
+        </p>
+      </section>
+      <section>
+        <h2>Beyond ads</h2>
+        <p class="note">Choose whether to speed through intros, recaps and previews.</p>
+        <div id="promos" class="panel"></div>
+      </section>
+      <details class="panel">
         <summary>Advanced &amp; diagnostics</summary>
         <div id="debug"></div>
         <form id="thresholds">
@@ -48,20 +56,26 @@
               max="1000"
               step="1"
               required /></label
-          ><button>Save thresholds</button>
-          <p id="threshold-status" role="status"></p>
+          ><button class="btn-primary">Save thresholds</button>
+          <p id="threshold-status" class="note" role="status"></p>
         </form>
-        <p>
+        <p class="note">
           Last 50 debug events from a supported tab. Enable debug logging first. Events stay in
           memory until the page closes.
         </p>
-        <button id="refresh">Refresh events</button><button id="export">Export JSON</button>
+        <div class="row">
+          <button id="refresh">Refresh events</button><button id="export">Export JSON</button>
+        </div>
         <pre id="events"></pre>
       </details>
-      <h2>Start fresh</h2>
-      <button id="reset-stats">Reset statistics</button
-      ><button id="reset-settings">Reset all settings</button>
-      <p id="saved" role="status"></p>
+      <section>
+        <h2>Start fresh</h2>
+        <div class="row">
+          <button id="reset-stats">Reset statistics</button
+          ><button id="reset-settings">Reset all settings</button>
+        </div>
+      </section>
+      <p id="saved" class="note" role="status"></p>
       <p id="error" role="alert"></p>
     </main>
     <script type="module" src="./main.ts"></script>

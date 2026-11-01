@@ -1,166 +1,84 @@
-:root {
-  color-scheme: light dark;
-  font-family: Arial, sans-serif;
-  color: #202124;
-  background: #fff;
-  --surface: #f1f3f4;
-  --accent: #185abc;
-  --line: #80868b;
-  --secondary: #51565c;
+@import '../../ui/theme.css';
+
+.hero {
+  padding-top: calc(var(--pixel) * 9);
+  padding-bottom: 28px;
 }
-* {
-  box-sizing: border-box;
-}
-body {
-  margin: 0;
-}
-main {
-  padding: 24px;
-}
-h1 {
-  font-size: 22px;
-  font-weight: 500;
-  margin: 0 0 8px;
-  letter-spacing: -0.5px;
-}
-h2 {
-  font-size: 16px;
-  font-weight: 500;
-  margin-top: 28px;
-}
-p {
-  color: var(--secondary);
-  font-size: 13px;
-  line-height: 1.6;
-}
-.control {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 0;
-  font-size: 14px;
-}
-input,
-select,
-button {
-  font: inherit;
-  accent-color: var(--accent);
-}
-input[type='checkbox'] {
-  width: 20px;
-  height: 20px;
-}
-select,
-button,
-input[type='number'] {
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 9px 12px;
-  background: var(--surface);
-  color: inherit;
-}
-button {
-  cursor: pointer;
-  margin: 4px 6px 4px 0;
-}
-:focus-visible {
-  outline: 3px solid var(--accent);
-  outline-offset: 3px;
-}
-a {
-  color: var(--accent);
-}
-.card {
-  background: var(--surface);
-  padding: 16px;
-  border-radius: 16px;
-  margin: 16px 0;
-}
-.stats {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 12px;
-  font-size: 13px;
-  line-height: 1.8;
-}
-.stats strong {
-  display: block;
-  font-size: 19px;
-  font-weight: 500;
-}
-small {
-  color: var(--secondary);
-}
-#error {
-  color: #b3261e;
-}
-pre {
-  font-size: 12px;
-  white-space: pre-wrap;
-  overflow-wrap: anywhere;
-  max-height: 320px;
-  overflow: auto;
-}
-summary {
-  cursor: pointer;
-  padding: 16px 0;
-}
-.tag {
-  font-size: 11px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  padding: 3px 6px;
-}
-@media (prefers-color-scheme: dark) {
-  :root {
-    color: #e8eaed;
-    background: #202124;
-    --surface: #303134;
-    --accent: #a8c7fa;
-    --line: #80868b;
-    --secondary: #bdc1c6;
-  }
-  #error {
-    color: #ffb4ab;
-  }
+/* main is 640px including its 16px gutters, so the header text lines up at 608px. */
+.hero-inner {
+  max-width: 608px;
+  margin: 0 auto;
 }
 main {
   max-width: 640px;
-  margin: 32px auto;
+  margin: 0 auto;
 }
-input[type='number'] {
-  width: 110px;
+.hero h1 {
+  font-size: 36px;
+}
+.hero p {
+  margin-top: 8px;
+  color: var(--on-dirt);
+  text-shadow: 1px 1px 0 var(--dirt-ink);
+}
+main {
+  display: grid;
+  gap: 28px;
+  padding: 28px 16px 48px;
+}
+section {
+  display: grid;
+  gap: 10px;
+}
+h2 {
+  margin: 0;
+  font-size: 20px;
+}
+.note:empty {
+  display: none;
 }
 
-@media (prefers-reduced-motion: no-preference) {
-  main {
-    animation: arrive 220ms ease-out both;
-  }
-  button,
-  select,
-  input,
-  a {
-    transition:
-      background-color 150ms ease,
-      border-color 150ms ease,
-      box-shadow 150ms ease;
-  }
-  button:hover {
-    border-color: var(--accent);
-    box-shadow: 0 2px 6px #00000014;
-  }
-  button:active {
-    transform: translateY(1px);
-  }
-  @keyframes arrive {
-    from {
-      opacity: 0;
-      transform: translateY(4px);
-    }
-    to {
-      opacity: 1;
-      transform: translateY(0);
-    }
-  }
+details.panel {
+  padding: 0 14px;
+}
+details[open] {
+  padding-bottom: 14px;
+}
+summary {
+  padding: 14px 0;
+  font-family: var(--font-pixel);
+  font-weight: 600;
+  font-size: 16px;
+  cursor: pointer;
+}
+details > * + * {
+  margin-top: 12px;
+}
+#thresholds {
+  display: grid;
+  justify-items: stretch;
+}
+#thresholds button {
+  justify-self: start;
+  margin-top: 8px;
+}
+.row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+pre {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 10px 12px;
+  border: 2px solid var(--outline);
+  background: var(--slot);
+  box-shadow: var(--inset);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+pre:empty {
+  display: none;
 }

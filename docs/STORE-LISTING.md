@@ -11,7 +11,7 @@ your previous speed and mute state. Live streams use mute only.
 - Choose 2×, 4×, 8× or 16×; actual speed depends on your browser and the player.
 - Enable or pause the extension instantly; choose platforms individually.
 - See local daily and all-time statistics. No telemetry or account required.
-- Minimal light/dark interface with keyboard controls and reduced-motion support.
+- Blocky pixel-art interface in light and dark, with keyboard controls and reduced-motion support.
 
 YouTube is supported. Netflix is **Experimental**, disabled by default, and its selectors
 are currently unverified. Do not claim Netflix compatibility until real-account validation.
